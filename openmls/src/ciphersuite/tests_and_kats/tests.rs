@@ -1,6 +1,6 @@
 //! Unit tests for the ciphersuites.
 
-use openmls_traits::types::HpkeCiphertext;
+use openmls_traits::types::{HpkeCiphertext, HpkeKemType};
 
 use crate::ciphersuite::*;
 
@@ -76,6 +76,32 @@ fn test_hpke_seal_open() {
         .map_err(|_| CryptoError::HpkeDecryptionError)
         .expect_err("Erroneously correct ciphertext decryption of broken ciphertext."),
         CryptoError::HpkeDecryptionError
+    );
+}
+
+// RFC 9180 requires DHKEM(X25519, HKDF-SHA256) to reject a non-contributory
+// all-zero Diffie-Hellman result. In particular, an all-zero recipient public
+// key must never produce an HPKE ciphertext.
+#[openmls_test::openmls_test]
+fn test_hpke_seal_rejects_all_zero_x25519_public_key() {
+    if ciphersuite.hpke_config().0 != HpkeKemType::DhKem25519 {
+        return;
+    }
+
+    let provider = &Provider::default();
+
+    assert!(
+        provider
+            .crypto()
+            .hpke_seal(
+                ciphersuite.hpke_config(),
+                &[0u8; 32],
+                b"info",
+                b"aad",
+                b"plaintext",
+            )
+            .is_err(),
+        "HPKE sealing accepted an all-zero X25519 recipient public key"
     );
 }
 
