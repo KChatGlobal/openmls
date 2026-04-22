@@ -59,6 +59,7 @@ pub use crate::treesync::{
 // pub use crate::schedule::psk::{
 //    BranchPsk, ExternalPsk, PreSharedKeyId, PreSharedKeys, Psk, PskBundle, PskType, ReinitPsk,
 // };
+pub use crate::schedule::{psk::store::ResumptionPskStore, GroupEpochSecrets};
 
 // Targeted messages
 #[cfg(feature = "targeted-messages-draft")]

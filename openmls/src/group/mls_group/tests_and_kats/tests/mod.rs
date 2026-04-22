@@ -2,6 +2,7 @@
 
 mod commit_builder_leaf_node_validation;
 mod external_init;
+mod load_optimize;
 mod mls_group;
 mod past_secrets;
 // Pulls in `openmls_sqlite_storage` and `openmls_libcrux_crypto`
