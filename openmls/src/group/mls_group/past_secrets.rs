@@ -1,8 +1,9 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use crate::schedule::message_secrets::MessageSecrets;
 
 use super::*;
+use serde::de::DeserializeOwned;
 
 // Internal helper struct
 #[derive(Serialize, Deserialize)]
@@ -179,4 +180,99 @@ impl MessageSecretsStore {
     pub(crate) fn message_secrets(&self) -> &MessageSecrets {
         &self.message_secrets
     }
+
+    pub(crate) fn from_optimize_payloads(
+        max_epochs: usize,
+        current_group_epoch: GroupEpoch,
+        current_epoch_payload: OptimizeCurrentEpochPayload,
+        mut past_epoch_payloads: Vec<OptimizePastEpochPayload>,
+    ) -> Result<Self, LoadOptimizeError> {
+        let message_secrets =
+            deserialize_current_epoch_payload(current_epoch_payload).map_err(|_| {
+                LoadOptimizeError::InvalidCurrentPayload
+            })?;
+
+        let mut seen_epochs = BTreeSet::new();
+        for payload in &past_epoch_payloads {
+            if payload.epoch >= current_group_epoch {
+                return Err(LoadOptimizeError::PastEpochIsCurrentOrFuture);
+            }
+
+            if !seen_epochs.insert(payload.epoch.as_u64()) {
+                return Err(LoadOptimizeError::DuplicatePastEpoch);
+            }
+        }
+
+        past_epoch_payloads.sort_by_key(|payload| payload.epoch);
+        if past_epoch_payloads.len() > max_epochs {
+            let keep_from = past_epoch_payloads.len() - max_epochs;
+            past_epoch_payloads = past_epoch_payloads.split_off(keep_from);
+        }
+
+        let mut past_epoch_trees = VecDeque::new();
+        for payload in past_epoch_payloads {
+            let epoch_tree =
+                deserialize_past_epoch_payload(payload).map_err(|_| LoadOptimizeError::InvalidPastPayload)?;
+            past_epoch_trees.push_back(epoch_tree);
+        }
+
+        Ok(Self {
+            max_epochs,
+            past_epoch_trees,
+            message_secrets,
+        })
+    }
+
+    pub(crate) fn export_current_epoch_payload(
+        &self,
+    ) -> Result<OptimizeCurrentEpochPayload, ExportOptimizeError> {
+        Ok(OptimizeCurrentEpochPayload {
+            payload: serialize_payload(&self.message_secrets)?,
+        })
+    }
+
+    pub(crate) fn export_past_epoch_payload(
+        &self,
+        epoch: GroupEpoch,
+    ) -> Result<Option<OptimizePastEpochPayload>, ExportOptimizeError> {
+        let epoch = epoch.as_u64();
+        self.past_epoch_trees
+            .iter()
+            .find(|epoch_tree| epoch_tree.epoch == epoch)
+            .map(encode_past_epoch_payload)
+            .transpose()
+    }
+}
+
+fn serialize_payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, ExportOptimizeError> {
+    bincode::serialize(value)
+        .map_err(|_| LibraryError::custom("Failed to serialize optimize payload").into())
+}
+
+fn deserialize_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, ()> {
+    bincode::deserialize(payload).map_err(|_| ())
+}
+
+fn deserialize_current_epoch_payload(
+    payload: OptimizeCurrentEpochPayload,
+) -> Result<MessageSecrets, ()> {
+    deserialize_payload(&payload.payload)
+}
+
+fn encode_past_epoch_payload(
+    epoch_tree: &EpochTree,
+) -> Result<OptimizePastEpochPayload, ExportOptimizeError> {
+    Ok(OptimizePastEpochPayload {
+        epoch: epoch_tree.epoch.into(),
+        payload: serialize_payload(epoch_tree)?,
+    })
+}
+
+fn deserialize_past_epoch_payload(payload: OptimizePastEpochPayload) -> Result<EpochTree, ()> {
+    let epoch = payload.epoch;
+    let epoch_tree: EpochTree = deserialize_payload(&payload.payload)?;
+    if epoch_tree.epoch != epoch.as_u64() {
+        return Err(());
+    }
+    Ok(epoch_tree)
 }

@@ -54,6 +54,7 @@ mod exporting;
 mod updates;
 
 use config::*;
+use errors::{ExportOptimizeError, LoadOptimizeError};
 
 // Crate
 pub(crate) mod builder;
@@ -94,6 +95,22 @@ pub struct Member {
     pub encryption_key: Vec<u8>,
     /// The member's public signature key.
     pub signature_key: Vec<u8>,
+}
+
+/// Opaque payload for the message secrets of the current epoch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizeCurrentEpochPayload {
+    /// Serialized representation of the current epoch message secrets.
+    pub payload: Vec<u8>,
+}
+
+/// Opaque payload for a specific past epoch secret tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizePastEpochPayload {
+    /// The past epoch this payload belongs to.
+    pub epoch: GroupEpoch,
+    /// Serialized representation of the past epoch secret tree.
+    pub payload: Vec<u8>,
 }
 
 impl Member {
@@ -460,6 +477,43 @@ impl MlsGroup {
         Ok(build())
     }
 
+    /// Loads a group from state supplied directly by the caller.
+    pub fn load_optimize(
+        public_group: PublicGroup,
+        group_epoch_secrets: GroupEpochSecrets,
+        own_leaf_index: LeafNodeIndex,
+        resumption_psk_store: ResumptionPskStore,
+        mls_group_config: MlsGroupJoinConfig,
+        own_leaf_nodes: Vec<LeafNode>,
+        group_state: MlsGroupState,
+        current_epoch_payload: OptimizeCurrentEpochPayload,
+        past_epoch_payloads: Vec<OptimizePastEpochPayload>,
+        #[cfg(feature = "extensions-draft-08")]
+        application_export_tree: Option<ApplicationExportTree>,
+    ) -> Result<MlsGroup, LoadOptimizeError> {
+        let current_group_epoch = public_group.group_context().epoch();
+        let message_secrets_store = MessageSecretsStore::from_optimize_payloads(
+            mls_group_config.max_past_epochs,
+            current_group_epoch,
+            current_epoch_payload,
+            past_epoch_payloads,
+        )?;
+
+        Ok(Self {
+            public_group,
+            group_epoch_secrets,
+            own_leaf_index,
+            message_secrets_store,
+            resumption_psk_store,
+            mls_group_config,
+            own_leaf_nodes,
+            aad: vec![],
+            group_state,
+            #[cfg(feature = "extensions-draft-08")]
+            application_export_tree,
+        })
+    }
+
     /// Remove the persisted state of this group from storage. Note that
     /// signature key material is not managed by OpenMLS and has to be removed
     /// from the storage provider separately (if desired).
@@ -495,6 +549,21 @@ impl MlsGroup {
     /// Exports the Ratchet Tree.
     pub fn export_ratchet_tree(&self) -> RatchetTree {
         self.public_group().export_ratchet_tree()
+    }
+
+    /// Export the current epoch message secrets as an opaque payload.
+    pub fn export_current_epoch_payload(
+        &self,
+    ) -> Result<OptimizeCurrentEpochPayload, ExportOptimizeError> {
+        self.message_secrets_store.export_current_epoch_payload()
+    }
+
+    /// Export a past epoch secret tree as an opaque payload.
+    pub fn export_past_epoch_payload(
+        &self,
+        epoch: GroupEpoch,
+    ) -> Result<Option<OptimizePastEpochPayload>, ExportOptimizeError> {
+        self.message_secrets_store.export_past_epoch_payload(epoch)
     }
 }
 

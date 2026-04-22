@@ -90,6 +90,34 @@ pub enum MlsGroupStateError {
     PendingProposalNotFound,
 }
 
+/// Error loading a group from optimize payloads.
+#[derive(Error, Debug, PartialEq, Clone)]
+pub enum LoadOptimizeError {
+    /// See [`LibraryError`] for more details.
+    #[error(transparent)]
+    LibraryError(#[from] LibraryError),
+    /// The supplied current epoch payload could not be decoded.
+    #[error("The supplied current epoch payload is invalid.")]
+    InvalidCurrentPayload,
+    /// The supplied past epoch payload could not be decoded.
+    #[error("The supplied past epoch payload is invalid.")]
+    InvalidPastPayload,
+    /// Duplicate past epoch payloads were supplied.
+    #[error("Duplicate past epoch payloads were supplied.")]
+    DuplicatePastEpoch,
+    /// Past epoch payloads must only contain epochs older than the current group epoch.
+    #[error("Past epoch payload must be older than the current group epoch.")]
+    PastEpochIsCurrentOrFuture,
+}
+
+/// Error exporting optimize payloads from a loaded group.
+#[derive(Error, Debug, PartialEq, Clone)]
+pub enum ExportOptimizeError {
+    /// See [`LibraryError`] for more details.
+    #[error(transparent)]
+    LibraryError(#[from] LibraryError),
+}
+
 /// Error merging pending commit
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum MergePendingCommitError<StorageError> {
