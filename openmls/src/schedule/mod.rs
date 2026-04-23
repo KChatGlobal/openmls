@@ -1275,6 +1275,7 @@ impl EpochSecrets {
 
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "test-utils"), derive(Clone, PartialEq))]
+/// Epoch-level secrets for a group.
 pub struct GroupEpochSecrets {
     init_secret: InitSecret,
     exporter_secret: ExporterSecret,

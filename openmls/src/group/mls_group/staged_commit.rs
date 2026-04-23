@@ -787,8 +787,7 @@ impl MlsGroup {
                 storage
                     .write_group_epoch_secrets(group_id, &self.group_epoch_secrets)
                     .map_err(MergeCommitError::StorageError)?;
-                storage
-                    .write_message_secrets(group_id, &self.message_secrets_store)
+                self.persist_message_secrets_if_legacy(storage)
                     .map_err(MergeCommitError::StorageError)?;
 
                 // Store the relevant keys under the new epoch

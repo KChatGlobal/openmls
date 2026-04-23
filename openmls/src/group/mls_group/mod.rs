@@ -125,6 +125,12 @@ pub struct OptimizePastEpochPayload {
     pub payload: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MessageSecretsPersistenceMode {
+    LegacyStorage,
+    ExternalEpochPayloads,
+}
+
 impl Member {
     /// Create new member.
     pub fn new(
@@ -275,6 +281,7 @@ pub struct MlsGroup {
     /// able to decrypt application messages from previous epochs, the size of
     /// the store must be increased through [`max_past_epochs()`].
     message_secrets_store: MessageSecretsStore,
+    message_secrets_persistence_mode: MessageSecretsPersistenceMode,
     // Resumption psk store. This is where the resumption psks are kept in a rollover list.
     resumption_psk_store: ResumptionPskStore,
     // Own [`LeafNode`]s that were created for update proposals and that
@@ -535,6 +542,7 @@ impl MlsGroup {
                 group_epoch_secrets: group_epoch_secrets?,
                 own_leaf_index: own_leaf_index?,
                 message_secrets_store: message_secrets_store?,
+                message_secrets_persistence_mode: MessageSecretsPersistenceMode::LegacyStorage,
                 resumption_psk_store: resumption_psk_store?,
                 mls_group_config: mls_group_config?,
                 own_leaf_nodes,
@@ -577,6 +585,7 @@ impl MlsGroup {
             group_epoch_secrets,
             own_leaf_index,
             message_secrets_store,
+            message_secrets_persistence_mode: MessageSecretsPersistenceMode::ExternalEpochPayloads,
             resumption_psk_store,
             mls_group_config,
             own_leaf_nodes,
@@ -902,9 +911,7 @@ impl MlsGroup {
             msg
         };
 
-        provider
-            .storage()
-            .write_message_secrets(self.group_id(), &self.message_secrets_store)
+        self.persist_message_secrets_if_legacy(provider.storage())
             .map_err(MessageEncryptionError::StorageError)?;
 
         Ok(msg)
@@ -1113,13 +1120,24 @@ impl MlsGroup {
         self.public_group.store(storage)?;
         storage.write_group_epoch_secrets(self.group_id(), &self.group_epoch_secrets)?;
         storage.write_own_leaf_index(self.group_id(), &self.own_leaf_index)?;
-        storage.write_message_secrets(self.group_id(), &self.message_secrets_store)?;
+        self.persist_message_secrets_if_legacy(storage)?;
         storage.write_resumption_psk_store(self.group_id(), &self.resumption_psk_store)?;
         storage.write_mls_join_config(self.group_id(), &self.mls_group_config)?;
         storage.write_group_state(self.group_id(), &self.group_state)?;
         #[cfg(feature = "extensions-draft")]
         if let Some(application_export_tree) = &self.application_export_tree {
             storage.write_application_export_tree(self.group_id(), application_export_tree)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn persist_message_secrets_if_legacy<Storage: crate::storage::StorageProvider>(
+        &self,
+        storage: &Storage,
+    ) -> Result<(), Storage::Error> {
+        if self.message_secrets_persistence_mode == MessageSecretsPersistenceMode::LegacyStorage {
+            storage.write_message_secrets(self.group_id(), &self.message_secrets_store)?;
         }
 
         Ok(())
