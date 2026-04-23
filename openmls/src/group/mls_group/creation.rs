@@ -562,6 +562,7 @@ impl StagedWelcome {
             group_epoch_secrets: self.group_epoch_secrets,
             own_leaf_index: self.own_leaf_index,
             message_secrets_store: self.message_secrets_store,
+            message_secrets_persistence_mode: MessageSecretsPersistenceMode::LegacyStorage,
             resumption_psk_store: self.resumption_psk_store,
             #[cfg(feature = "extensions-draft-08")]
             application_export_tree: Some(application_export_tree),

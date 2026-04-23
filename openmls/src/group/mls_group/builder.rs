@@ -11,7 +11,7 @@ use crate::{
     group::{
         past_secrets::MessageSecretsStore, public_group::errors::PublicGroupBuildError,
         GroupContext, GroupId, MlsGroup, MlsGroupCreateConfig, MlsGroupCreateConfigBuilder,
-        MlsGroupState, NewGroupError, PublicGroup, WireFormatPolicy,
+        MessageSecretsPersistenceMode, MlsGroupState, NewGroupError, PublicGroup, WireFormatPolicy,
     },
     key_packages::Lifetime,
     schedule::{
@@ -185,6 +185,7 @@ impl MlsGroupBuilder {
             group_epoch_secrets,
             own_leaf_index: LeafNodeIndex::new(0),
             message_secrets_store,
+            message_secrets_persistence_mode: MessageSecretsPersistenceMode::LegacyStorage,
             resumption_psk_store,
             #[cfg(feature = "extensions-draft-08")]
             application_export_tree: Some(application_export_tree),

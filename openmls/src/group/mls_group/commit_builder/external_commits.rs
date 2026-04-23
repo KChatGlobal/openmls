@@ -14,8 +14,8 @@ use crate::{
         past_secrets::MessageSecretsStore,
         public_group::errors::CreationFromExternalError,
         ExternalCommitBuilderFinalizeError, LeafNodeLifetimePolicy, MlsGroup, MlsGroupJoinConfig,
-        MlsGroupState, PendingCommitState, ProposalStore, PublicGroup, QueuedProposal,
-        ValidationError, PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
+        MessageSecretsPersistenceMode, MlsGroupState, PendingCommitState, ProposalStore,
+        PublicGroup, QueuedProposal, ValidationError, PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
     },
     messages::{
         group_info::VerifiableGroupInfo,
@@ -287,6 +287,7 @@ impl ExternalCommitBuilder {
             group_epoch_secrets,
             own_leaf_index,
             message_secrets_store,
+            message_secrets_persistence_mode: MessageSecretsPersistenceMode::LegacyStorage,
             resumption_psk_store: ResumptionPskStore::new(32),
             // This is set to `None` for now. It will be set once the external
             // commit is merged.
