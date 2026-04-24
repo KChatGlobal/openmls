@@ -346,10 +346,8 @@ impl MessageSecretsStore {
         current_epoch_payload: OptimizeCurrentEpochPayload,
         mut past_epoch_payloads: Vec<OptimizePastEpochPayload>,
     ) -> Result<Self, LoadOptimizeError> {
-        let message_secrets =
-            deserialize_current_epoch_payload(current_epoch_payload).map_err(|_| {
-                LoadOptimizeError::InvalidCurrentPayload
-            })?;
+        let message_secrets = deserialize_current_epoch_payload(current_epoch_payload)
+            .map_err(|_| LoadOptimizeError::InvalidCurrentPayload)?;
 
         let mut seen_epochs = BTreeSet::new();
         for payload in &past_epoch_payloads {
@@ -370,8 +368,8 @@ impl MessageSecretsStore {
 
         let mut past_epoch_trees = VecDeque::new();
         for payload in past_epoch_payloads {
-            let epoch_tree =
-                deserialize_past_epoch_payload(payload).map_err(|_| LoadOptimizeError::InvalidPastPayload)?;
+            let epoch_tree = deserialize_past_epoch_payload(payload)
+                .map_err(|_| LoadOptimizeError::InvalidPastPayload)?;
             past_epoch_trees.push_back(epoch_tree);
         }
 

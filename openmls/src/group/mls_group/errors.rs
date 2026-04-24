@@ -120,6 +120,32 @@ pub enum LoadOptimizeError {
     /// See [`LibraryError`] for more details.
     #[error(transparent)]
     LibraryError(#[from] LibraryError),
+    /// The underlying storage returned an error.
+    #[error("Storage error while loading optimize group: {0}")]
+    StorageError(String),
+    /// The epoch-based metadata row is missing for this group.
+    #[error("Missing group epoch metadata.")]
+    MissingGroupEpochMetadata,
+    /// The epoch metadata does not match the persisted public group epoch.
+    #[error("Epoch metadata mismatch: meta={meta}, group={group}.")]
+    EpochMetadataMismatch {
+        /// Epoch stored in epoch-based metadata.
+        meta: u64,
+        /// Epoch stored in the public group context.
+        group: u64,
+    },
+    /// The current epoch payload row is missing.
+    #[error("Missing current epoch payload for epoch {epoch}.")]
+    MissingCurrentEpochPayload {
+        /// Missing current epoch.
+        epoch: u64,
+    },
+    /// A requested past epoch payload row is missing.
+    #[error("Missing past epoch payload for epoch {epoch}.")]
+    MissingPastEpochPayload {
+        /// Missing past epoch.
+        epoch: u64,
+    },
     /// The supplied current epoch payload could not be decoded.
     #[error("The supplied current epoch payload is invalid.")]
     InvalidCurrentPayload,
@@ -132,6 +158,12 @@ pub enum LoadOptimizeError {
     /// Past epoch payloads must only contain epochs older than the current group epoch.
     #[error("Past epoch payload must be older than the current group epoch.")]
     PastEpochIsCurrentOrFuture,
+}
+
+impl LoadOptimizeError {
+    pub(crate) fn storage<E: core::fmt::Debug>(error: E) -> Self {
+        Self::StorageError(format!("{error:?}"))
+    }
 }
 
 /// Error exporting optimize payloads from a loaded group.
