@@ -10,8 +10,8 @@ use crate::{
     extensions::Extensions,
     group::{
         past_secrets::MessageSecretsStore, public_group::errors::PublicGroupBuildError,
-        GroupContext, GroupId, MlsGroup, MlsGroupCreateConfig, MlsGroupCreateConfigBuilder,
-        MessageSecretsPersistenceMode, MlsGroupState, NewGroupError, PublicGroup, WireFormatPolicy,
+        GroupContext, GroupId, MessageSecretsPersistenceMode, MlsGroup, MlsGroupCreateConfig,
+        MlsGroupCreateConfigBuilder, MlsGroupState, NewGroupError, PublicGroup, WireFormatPolicy,
     },
     key_packages::Lifetime,
     schedule::{

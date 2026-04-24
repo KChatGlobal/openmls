@@ -485,21 +485,98 @@ impl MlsGroup {
         Ok(build())
     }
 
-    /// Loads a group from state supplied directly by the caller.
-    pub fn load_optimize(
-        public_group: PublicGroup,
-        group_epoch_secrets: GroupEpochSecrets,
-        own_leaf_index: LeafNodeIndex,
-        resumption_psk_store: ResumptionPskStore,
-        mls_group_config: MlsGroupJoinConfig,
-        own_leaf_nodes: Vec<LeafNode>,
-        group_state: MlsGroupState,
-        current_epoch_payload: OptimizeCurrentEpochPayload,
-        past_epoch_payloads: Vec<OptimizePastEpochPayload>,
-        #[cfg(feature = "extensions-draft-08")]
-        application_export_tree: Option<ApplicationExportTree>,
-    ) -> Result<MlsGroup, LoadOptimizeError> {
+    /// Loads a group with MessageSecrets supplied by epoch-based storage rows.
+    ///
+    /// KCHAT: This mirrors [`MlsGroup::load`] by loading the persisted group
+    /// state from the storage provider, but reconstructs the
+    /// `MessageSecretsStore` from selected epoch payload rows instead of the
+    /// legacy group-level `message_secrets` blob.
+    pub fn load_optimize<Storage: crate::storage::StorageProvider>(
+        storage: &Storage,
+        group_id: &GroupId,
+        past_epochs: impl IntoIterator<Item = GroupEpoch>,
+    ) -> Result<Option<MlsGroup>, LoadOptimizeError> {
+        let public_group =
+            PublicGroup::load(storage, group_id).map_err(LoadOptimizeError::storage)?;
+        let Some(public_group) = public_group else {
+            return Ok(None);
+        };
+
         let current_group_epoch = public_group.group_context().epoch();
+        let current_epoch = storage
+            .group_current_epoch(group_id)
+            .map_err(LoadOptimizeError::storage)?
+            .ok_or(LoadOptimizeError::MissingGroupEpochMetadata)?;
+        let public_current_epoch = current_group_epoch.as_u64();
+        if current_epoch != public_current_epoch {
+            return Err(LoadOptimizeError::EpochMetadataMismatch {
+                meta: current_epoch,
+                group: public_current_epoch,
+            });
+        }
+
+        let current_epoch_payload = OptimizeCurrentEpochPayload {
+            payload: storage
+                .group_epoch_payload(group_id, current_epoch)
+                .map_err(LoadOptimizeError::storage)?
+                .ok_or(LoadOptimizeError::MissingCurrentEpochPayload {
+                    epoch: current_epoch,
+                })?,
+        };
+
+        let mut past_epoch_payloads = Vec::new();
+        for epoch in past_epochs {
+            let epoch = epoch.as_u64();
+            if epoch < current_epoch {
+                past_epoch_payloads.push(OptimizePastEpochPayload {
+                    epoch: epoch.into(),
+                    payload: storage
+                        .group_epoch_payload(group_id, epoch)
+                        .map_err(LoadOptimizeError::storage)?
+                        .ok_or(LoadOptimizeError::MissingPastEpochPayload { epoch })?,
+                });
+            }
+        }
+
+        let group_epoch_secrets: Option<GroupEpochSecrets> = storage
+            .group_epoch_secrets(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        let own_leaf_index: Option<LeafNodeIndex> = storage
+            .own_leaf_index(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        let resumption_psk_store: Option<ResumptionPskStore> = storage
+            .resumption_psk_store(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        let mls_group_config: Option<MlsGroupJoinConfig> = storage
+            .mls_group_join_config(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        let own_leaf_nodes: Vec<LeafNode> = storage
+            .own_leaf_nodes(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        let group_state: Option<MlsGroupState> = storage
+            .group_state(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        #[cfg(feature = "extensions-draft-08")]
+        let application_export_tree = storage
+            .application_export_tree(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+
+        let Some(group_epoch_secrets) = group_epoch_secrets else {
+            return Ok(None);
+        };
+        let Some(own_leaf_index) = own_leaf_index else {
+            return Ok(None);
+        };
+        let Some(resumption_psk_store) = resumption_psk_store else {
+            return Ok(None);
+        };
+        let Some(mls_group_config) = mls_group_config else {
+            return Ok(None);
+        };
+        let Some(group_state) = group_state else {
+            return Ok(None);
+        };
+
         let message_secrets_store = MessageSecretsStore::from_optimize_payloads(
             mls_group_config.max_past_epochs,
             current_group_epoch,
@@ -507,7 +584,7 @@ impl MlsGroup {
             past_epoch_payloads,
         )?;
 
-        Ok(Self {
+        Ok(Some(Self {
             public_group,
             group_epoch_secrets,
             own_leaf_index,
@@ -520,7 +597,7 @@ impl MlsGroup {
             group_state,
             #[cfg(feature = "extensions-draft-08")]
             application_export_tree,
-        })
+        }))
     }
 
     /// Remove the persisted state of this group from storage. Note that

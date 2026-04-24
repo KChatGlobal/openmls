@@ -337,6 +337,29 @@ pub trait StorageProvider<const VERSION: u16> {
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error>;
 
+    /// Returns the current epoch tracked by an epoch-based MessageSecretsStore.
+    ///
+    /// KCHAT: This defaults to `None` so existing storage providers keep their
+    /// legacy behavior unless they opt in to the epoch-based load path.
+    fn group_current_epoch<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+    ) -> Result<Option<u64>, Self::Error> {
+        Ok(None)
+    }
+
+    /// Returns an opaque MessageSecrets payload for a single group epoch.
+    ///
+    /// KCHAT: The payload is intentionally opaque to the storage layer. OpenMLS
+    /// decodes it when reconstructing the in-memory MessageSecretsStore.
+    fn group_epoch_payload<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+        _epoch: u64,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        Ok(None)
+    }
+
     /// Returns the ResumptionPskStore for the group with the given id.
     ///
     /// Returning `None` here is considered an error because the store is needed

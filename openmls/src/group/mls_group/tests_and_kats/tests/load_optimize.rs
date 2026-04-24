@@ -9,78 +9,46 @@ use crate::{
     test_utils::OpenMlsRustCrypto,
 };
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_traits::storage::StorageProvider as _;
 
-fn try_load_group_optimize<Provider: crate::storage::OpenMlsProvider>(
-    provider: &Provider,
+fn try_load_group_optimize(
+    provider: &OpenMlsRustCrypto,
     group_id: &GroupId,
     current_epoch_payload: OptimizeCurrentEpochPayload,
     past_epoch_payloads: Vec<OptimizePastEpochPayload>,
 ) -> Result<MlsGroup, LoadOptimizeError> {
     let storage = provider.storage();
-    let public_group = PublicGroup::load(storage, group_id)
+    let current_epoch = MlsGroup::load(storage, group_id)
         .unwrap()
-        .expect("group should exist in storage");
-    let group_epoch_secrets = storage
-        .group_epoch_secrets(group_id)
-        .unwrap()
-        .expect("group epoch secrets should exist in storage");
-    let own_leaf_index = storage
-        .own_leaf_index(group_id)
-        .unwrap()
-        .expect("own leaf index should exist in storage");
-    let resumption_psk_store = storage
-        .resumption_psk_store(group_id)
-        .unwrap()
-        .expect("resumption psk store should exist in storage");
-    let mls_group_config = storage
-        .mls_group_join_config(group_id)
-        .unwrap()
-        .expect("group config should exist in storage");
-    let own_leaf_nodes = storage.own_leaf_nodes(group_id).unwrap();
-    let group_state = storage
-        .group_state(group_id)
-        .unwrap()
-        .expect("group state should exist in storage");
-
-    #[cfg(feature = "extensions-draft-08")]
-    let application_export_tree = storage.application_export_tree(group_id).unwrap();
-
-    #[cfg(feature = "extensions-draft-08")]
-    {
-        MlsGroup::load_optimize(
-            public_group,
-            group_epoch_secrets,
-            own_leaf_index,
-            resumption_psk_store,
-            mls_group_config,
-            own_leaf_nodes,
-            group_state,
-            current_epoch_payload,
-            past_epoch_payloads,
-            application_export_tree,
-        )
+        .expect("group should exist in storage")
+        .epoch()
+        .as_u64();
+    storage
+        .write_group_current_epoch(group_id, current_epoch)
+        .unwrap();
+    storage
+        .write_group_epoch_payload(group_id, current_epoch, &current_epoch_payload.payload)
+        .unwrap();
+    for past_epoch_payload in &past_epoch_payloads {
+        storage
+            .write_group_epoch_payload(
+                group_id,
+                past_epoch_payload.epoch.as_u64(),
+                &past_epoch_payload.payload,
+            )
+            .unwrap();
     }
 
-    #[cfg(not(feature = "extensions-draft-08"))]
-    {
-        MlsGroup::load_optimize(
-            public_group,
-            group_epoch_secrets,
-            own_leaf_index,
-            resumption_psk_store,
-            mls_group_config,
-            own_leaf_nodes,
-            group_state,
-            current_epoch_payload,
-            past_epoch_payloads,
-        )
-    }
+    MlsGroup::load_optimize(
+        storage,
+        group_id,
+        past_epoch_payloads
+            .iter()
+            .map(|past_epoch_payload| past_epoch_payload.epoch),
+    )
+    .map(|group| group.expect("group should exist in storage"))
 }
 
-fn extract_application_message(
-    processed_message: ProcessedMessage,
-) -> Vec<u8> {
+fn extract_application_message(processed_message: ProcessedMessage) -> Vec<u8> {
     match processed_message.into_content() {
         ProcessedMessageContent::ApplicationMessage(message) => message.into_bytes(),
         other => panic!("expected application message, got {other:?}"),
@@ -210,11 +178,19 @@ fn test_load_optimize_roundtrip_past_epoch() {
         .unwrap();
     let old_epoch = bob_group.epoch();
 
-    let (charlie_credential, charlie_signer) =
-        new_credential(&alice_provider, b"Charlie", ciphersuite.signature_algorithm());
+    let (charlie_credential, charlie_signer) = new_credential(
+        &alice_provider,
+        b"Charlie",
+        ciphersuite.signature_algorithm(),
+    );
     let charlie_key_package = KeyPackage::builder()
         .key_package_extensions(Extensions::empty())
-        .build(ciphersuite, &alice_provider, &charlie_signer, charlie_credential)
+        .build(
+            ciphersuite,
+            &alice_provider,
+            &charlie_signer,
+            charlie_credential,
+        )
         .unwrap()
         .key_package()
         .to_owned();
@@ -285,26 +261,30 @@ fn test_load_optimize_roundtrip_past_epoch() {
     .expect_err("duplicate past payloads must fail");
     assert_eq!(duplicate_err, LoadOptimizeError::DuplicatePastEpoch);
 
-    let invalid_epoch_err = try_load_group_optimize(
+    try_load_group_optimize(
         &bob_provider,
         &group_id,
         bob_group.export_current_epoch_payload().unwrap(),
         vec![OptimizePastEpochPayload {
-            epoch: bob_group.epoch(),
+            epoch: (bob_group.epoch().as_u64() + 1).into(),
             payload: past_epoch_payload.payload.clone(),
         }],
     )
-    .expect_err("current epoch cannot be supplied as a past epoch payload");
-    assert_eq!(invalid_epoch_err, LoadOptimizeError::PastEpochIsCurrentOrFuture);
+    .expect("future epoch requests should be ignored at load time");
 
     let invalid_current_err = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        OptimizeCurrentEpochPayload { payload: vec![0xff] },
+        OptimizeCurrentEpochPayload {
+            payload: vec![0xff],
+        },
         vec![past_epoch_payload.clone()],
     )
     .expect_err("corrupt current payload must fail");
-    assert_eq!(invalid_current_err, LoadOptimizeError::InvalidCurrentPayload);
+    assert_eq!(
+        invalid_current_err,
+        LoadOptimizeError::InvalidCurrentPayload
+    );
 
     let invalid_past_err = try_load_group_optimize(
         &bob_provider,
