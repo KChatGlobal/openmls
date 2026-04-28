@@ -243,12 +243,12 @@ impl MessageSecretsStore {
 }
 
 fn serialize_payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, ExportOptimizeError> {
-    bincode::serialize(value)
+    serde_json::to_vec(value)
         .map_err(|_| LibraryError::custom("Failed to serialize optimize payload").into())
 }
 
 fn deserialize_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, ()> {
-    bincode::deserialize(payload).map_err(|_| ())
+    serde_json::from_slice(payload).map_err(|_| ())
 }
 
 fn deserialize_current_epoch_payload(
