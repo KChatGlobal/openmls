@@ -90,7 +90,7 @@ pub enum MlsGroupStateError {
     PendingProposalNotFound,
 }
 
-/// Error loading a group from optimize payloads.
+/// Error loading a group from optimized MessageSecrets rows.
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum LoadOptimizeError {
     /// See [`LibraryError`] for more details.
@@ -101,39 +101,39 @@ pub enum LoadOptimizeError {
     StorageError(String),
     /// The epoch-based metadata row is missing for this group.
     #[error("Missing group epoch metadata.")]
-    MissingGroupEpochMetadata,
+    MissingGroupEpochMessageSecretsMetadata,
     /// The epoch metadata does not match the persisted public group epoch.
     #[error("Epoch metadata mismatch: meta={meta}, group={group}.")]
-    EpochMetadataMismatch {
+    EpochMessageSecretsMetadataMismatch {
         /// Epoch stored in epoch-based metadata.
         meta: u64,
         /// Epoch stored in the public group context.
         group: u64,
     },
-    /// The current epoch payload row is missing.
-    #[error("Missing current epoch payload for epoch {epoch}.")]
-    MissingCurrentEpochPayload {
+    /// The current epoch MessageSecrets row is missing.
+    #[error("Missing current epoch MessageSecrets for epoch {epoch}.")]
+    MissingCurrentEpochMessageSecrets {
         /// Missing current epoch.
         epoch: u64,
     },
-    /// A requested past epoch payload row is missing.
-    #[error("Missing past epoch payload for epoch {epoch}.")]
-    MissingPastEpochPayload {
+    /// A requested past epoch MessageSecrets row is missing.
+    #[error("Missing past epoch MessageSecrets for epoch {epoch}.")]
+    MissingPastEpochMessageSecrets {
         /// Missing past epoch.
         epoch: u64,
     },
-    /// The supplied current epoch payload could not be decoded.
-    #[error("The supplied current epoch payload is invalid.")]
-    InvalidCurrentPayload,
-    /// The supplied past epoch payload could not be decoded.
-    #[error("The supplied past epoch payload is invalid.")]
-    InvalidPastPayload,
-    /// Duplicate past epoch payloads were supplied.
-    #[error("Duplicate past epoch payloads were supplied.")]
-    DuplicatePastEpoch,
-    /// Past epoch payloads must only contain epochs older than the current group epoch.
-    #[error("Past epoch payload must be older than the current group epoch.")]
-    PastEpochIsCurrentOrFuture,
+    /// The supplied current epoch MessageSecrets could not be decoded.
+    #[error("The supplied current epoch MessageSecrets is invalid.")]
+    InvalidCurrentMessageSecrets,
+    /// The supplied past epoch MessageSecrets could not be decoded.
+    #[error("The supplied past epoch MessageSecrets is invalid.")]
+    InvalidPastMessageSecrets,
+    /// Duplicate past epoch message secrets were supplied.
+    #[error("Duplicate past epoch message secrets were supplied.")]
+    DuplicatePastEpochMessageSecrets,
+    /// Past epoch message secrets must only contain epochs older than the current group epoch.
+    #[error("Past epoch MessageSecrets must be older than the current group epoch.")]
+    PastEpochMessageSecretsIsCurrentOrFuture,
 }
 
 impl LoadOptimizeError {
@@ -142,7 +142,7 @@ impl LoadOptimizeError {
     }
 }
 
-/// Error exporting optimize payloads from a loaded group.
+/// Error exporting optimize message secrets from a loaded group.
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum ExportOptimizeError {
     /// See [`LibraryError`] for more details.

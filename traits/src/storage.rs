@@ -337,27 +337,62 @@ pub trait StorageProvider<const VERSION: u16> {
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error>;
 
-    /// Returns the current epoch tracked by an epoch-based MessageSecretsStore.
-    ///
-    /// KCHAT: This defaults to `None` so existing storage providers keep their
-    /// legacy behavior unless they opt in to the epoch-based load path.
-    fn group_current_epoch<GroupId: traits::GroupId<VERSION>>(
-        &self,
-        _group_id: &GroupId,
-    ) -> Result<Option<u64>, Self::Error> {
-        Ok(None)
+    /// KCHAT: Whether this storage provider supports epoch-based MessageSecrets rows.
+    fn supports_epoch_message_secrets(&self) -> bool {
+        false
     }
 
-    /// Returns an opaque MessageSecrets payload for a single group epoch.
-    ///
-    /// KCHAT: The payload is intentionally opaque to the storage layer. OpenMLS
-    /// decodes it when reconstructing the in-memory MessageSecretsStore.
-    fn group_epoch_payload<GroupId: traits::GroupId<VERSION>>(
+    /// KCHAT: Returns whether a group's MessageSecrets were migrated to epoch rows.
+    fn is_group_epoch_message_secrets_migrated<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+
+    /// KCHAT: Returns serialized MessageSecrets data for one group epoch.
+    fn group_epoch_message_secrets<GroupId: traits::GroupId<VERSION>>(
         &self,
         _group_id: &GroupId,
         _epoch: u64,
     ) -> Result<Option<Vec<u8>>, Self::Error> {
         Ok(None)
+    }
+
+    /// KCHAT: Writes serialized MessageSecrets data for one group epoch.
+    fn write_group_epoch_message_secrets<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+        _epoch: u64,
+        _message_secrets: &[u8],
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// KCHAT: Replaces all epoch-based MessageSecrets rows for one group.
+    fn replace_group_epoch_message_secrets<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+        _message_secrets: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// KCHAT: Marks whether a group has migrated to epoch-based MessageSecrets rows.
+    fn mark_group_epoch_message_secrets_migrated<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+        _done: bool,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// KCHAT: Deletes epoch-based MessageSecrets rows for one group.
+    fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 
     /// Returns the ResumptionPskStore for the group with the given id.

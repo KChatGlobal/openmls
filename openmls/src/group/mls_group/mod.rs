@@ -97,26 +97,63 @@ pub struct Member {
     pub signature_key: Vec<u8>,
 }
 
-/// Opaque payload for the message secrets of the current epoch.
+/// Opaque message_secrets for the message secrets of the current epoch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OptimizeCurrentEpochPayload {
+pub struct OptimizeCurrentEpochMessageSecrets {
     /// Serialized representation of the current epoch message secrets.
-    pub payload: Vec<u8>,
+    pub message_secrets: Vec<u8>,
 }
 
-/// Opaque payload for a specific past epoch secret tree.
+/// Opaque message_secrets for a specific past epoch secret tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OptimizePastEpochPayload {
-    /// The past epoch this payload belongs to.
+pub struct OptimizePastEpochMessageSecrets {
+    /// The past epoch this message_secrets belongs to.
     pub epoch: GroupEpoch,
     /// Serialized representation of the past epoch secret tree.
-    pub payload: Vec<u8>,
+    pub message_secrets: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageSecretsPersistenceMode {
     LegacyStorage,
-    ExternalEpochPayloads,
+    ExternalEpochMessageSecrets,
+}
+
+/// KCHAT: Rebuild the message secrets store from epoch-based storage rows.
+fn load_epoch_message_secrets_store<Storage: crate::storage::StorageProvider>(
+    storage: &Storage,
+    group_id: &GroupId,
+    current_epoch: GroupEpoch,
+    max_past_epochs: usize,
+) -> Result<Option<MessageSecretsStore>, Storage::Error> {
+    let current_epoch_u64 = current_epoch.as_u64();
+    let Some(current_epoch_bytes) =
+        storage.group_epoch_message_secrets(group_id, current_epoch_u64)?
+    else {
+        return Ok(None);
+    };
+    let current_epoch_message_secrets = OptimizeCurrentEpochMessageSecrets {
+        message_secrets: current_epoch_bytes,
+    };
+
+    let keep_from = current_epoch_u64.saturating_sub(max_past_epochs as u64);
+    let mut past_epoch_message_secrets = Vec::new();
+    for epoch in keep_from..current_epoch_u64 {
+        if let Some(message_secrets) = storage.group_epoch_message_secrets(group_id, epoch)? {
+            past_epoch_message_secrets.push(OptimizePastEpochMessageSecrets {
+                epoch: epoch.into(),
+                message_secrets,
+            });
+        }
+    }
+
+    Ok(MessageSecretsStore::from_epoch_message_secrets(
+        max_past_epochs,
+        current_epoch,
+        current_epoch_message_secrets,
+        past_epoch_message_secrets,
+    )
+    .ok())
 }
 
 impl Member {
@@ -457,9 +494,27 @@ impl MlsGroup {
         let public_group = PublicGroup::load(storage, group_id)?;
         let group_epoch_secrets = storage.group_epoch_secrets(group_id)?;
         let own_leaf_index = storage.own_leaf_index(group_id)?;
-        let message_secrets_store = storage.message_secrets(group_id)?;
         let resumption_psk_store = storage.resumption_psk_store(group_id)?;
-        let mls_group_config = storage.mls_group_join_config(group_id)?;
+        let mls_group_config: Option<MlsGroupJoinConfig> =
+            storage.mls_group_join_config(group_id)?;
+        let message_secrets_store = if let (Some(public_group), Some(mls_group_config)) =
+            (&public_group, &mls_group_config)
+        {
+            if storage.supports_epoch_message_secrets()
+                && storage.is_group_epoch_message_secrets_migrated(group_id)?
+            {
+                load_epoch_message_secrets_store(
+                    storage,
+                    group_id,
+                    public_group.group_context().epoch(),
+                    mls_group_config.max_past_epochs,
+                )?
+            } else {
+                storage.message_secrets(group_id)?
+            }
+        } else {
+            storage.message_secrets(group_id)?
+        };
         let own_leaf_nodes = storage.own_leaf_nodes(group_id)?;
         let group_state = storage.group_state(group_id)?;
         #[cfg(feature = "extensions-draft-08")]
@@ -471,7 +526,11 @@ impl MlsGroup {
                 group_epoch_secrets: group_epoch_secrets?,
                 own_leaf_index: own_leaf_index?,
                 message_secrets_store: message_secrets_store?,
-                message_secrets_persistence_mode: MessageSecretsPersistenceMode::LegacyStorage,
+                message_secrets_persistence_mode: if storage.supports_epoch_message_secrets() {
+                    MessageSecretsPersistenceMode::ExternalEpochMessageSecrets
+                } else {
+                    MessageSecretsPersistenceMode::LegacyStorage
+                },
                 resumption_psk_store: resumption_psk_store?,
                 mls_group_config: mls_group_config?,
                 own_leaf_nodes,
@@ -485,11 +544,55 @@ impl MlsGroup {
         Ok(build())
     }
 
+    /// KCHAT: Export epoch MessageSecrets rows from legacy group-level storage.
+    ///
+    /// This is used by storage migrations to avoid loading the full `MlsGroup`.
+    /// It reads the public group for the current epoch and the legacy
+    /// `MessageSecretsStore` blob for the secret material.
+    pub fn export_epoch_message_secrets_snapshot_from_storage<
+        Storage: crate::storage::StorageProvider,
+    >(
+        storage: &Storage,
+        group_id: &GroupId,
+    ) -> Result<Option<Vec<(u64, Vec<u8>)>>, LoadOptimizeError> {
+        let public_group =
+            PublicGroup::load(storage, group_id).map_err(LoadOptimizeError::storage)?;
+        let Some(public_group) = public_group else {
+            return Ok(None);
+        };
+        let message_secrets_store: Option<MessageSecretsStore> = storage
+            .message_secrets(group_id)
+            .map_err(LoadOptimizeError::storage)?;
+        let Some(message_secrets_store) = message_secrets_store else {
+            return Ok(None);
+        };
+
+        let current_epoch = public_group.group_context().epoch().as_u64();
+        let mut rows = Vec::with_capacity(current_epoch as usize + 1);
+        rows.push((
+            current_epoch,
+            message_secrets_store
+                .export_current_epoch_message_secrets()
+                .map_err(|_| LibraryError::custom("Failed to export epoch MessageSecrets"))?
+                .message_secrets,
+        ));
+        for epoch in 0..current_epoch {
+            if let Some(message_secrets) = message_secrets_store
+                .export_past_epoch_message_secrets(epoch.into())
+                .map_err(|_| LibraryError::custom("Failed to export epoch MessageSecrets"))?
+            {
+                rows.push((epoch, message_secrets.message_secrets));
+            }
+        }
+
+        Ok(Some(rows))
+    }
+
     /// Loads a group with MessageSecrets supplied by epoch-based storage rows.
     ///
     /// KCHAT: This mirrors [`MlsGroup::load`] by loading the persisted group
     /// state from the storage provider, but reconstructs the
-    /// `MessageSecretsStore` from selected epoch payload rows instead of the
+    /// `MessageSecretsStore` from selected epoch message_secrets rows instead of the
     /// legacy group-level `message_secrets` blob.
     pub fn load_optimize<Storage: crate::storage::StorageProvider>(
         storage: &Storage,
@@ -503,37 +606,33 @@ impl MlsGroup {
         };
 
         let current_group_epoch = public_group.group_context().epoch();
-        let current_epoch = storage
-            .group_current_epoch(group_id)
+        let current_epoch = current_group_epoch.as_u64();
+        if !storage
+            .is_group_epoch_message_secrets_migrated(group_id)
             .map_err(LoadOptimizeError::storage)?
-            .ok_or(LoadOptimizeError::MissingGroupEpochMetadata)?;
-        let public_current_epoch = current_group_epoch.as_u64();
-        if current_epoch != public_current_epoch {
-            return Err(LoadOptimizeError::EpochMetadataMismatch {
-                meta: current_epoch,
-                group: public_current_epoch,
-            });
+        {
+            return Err(LoadOptimizeError::MissingGroupEpochMessageSecretsMetadata);
         }
 
-        let current_epoch_payload = OptimizeCurrentEpochPayload {
-            payload: storage
-                .group_epoch_payload(group_id, current_epoch)
+        let current_epoch_message_secrets = OptimizeCurrentEpochMessageSecrets {
+            message_secrets: storage
+                .group_epoch_message_secrets(group_id, current_epoch)
                 .map_err(LoadOptimizeError::storage)?
-                .ok_or(LoadOptimizeError::MissingCurrentEpochPayload {
+                .ok_or(LoadOptimizeError::MissingCurrentEpochMessageSecrets {
                     epoch: current_epoch,
                 })?,
         };
 
-        let mut past_epoch_payloads = Vec::new();
+        let mut past_epoch_message_secrets = Vec::new();
         for epoch in past_epochs {
             let epoch = epoch.as_u64();
             if epoch < current_epoch {
-                past_epoch_payloads.push(OptimizePastEpochPayload {
+                past_epoch_message_secrets.push(OptimizePastEpochMessageSecrets {
                     epoch: epoch.into(),
-                    payload: storage
-                        .group_epoch_payload(group_id, epoch)
+                    message_secrets: storage
+                        .group_epoch_message_secrets(group_id, epoch)
                         .map_err(LoadOptimizeError::storage)?
-                        .ok_or(LoadOptimizeError::MissingPastEpochPayload { epoch })?,
+                        .ok_or(LoadOptimizeError::MissingPastEpochMessageSecrets { epoch })?,
                 });
             }
         }
@@ -577,11 +676,11 @@ impl MlsGroup {
             return Ok(None);
         };
 
-        let message_secrets_store = MessageSecretsStore::from_optimize_payloads(
+        let message_secrets_store = MessageSecretsStore::from_epoch_message_secrets(
             mls_group_config.max_past_epochs,
             current_group_epoch,
-            current_epoch_payload,
-            past_epoch_payloads,
+            current_epoch_message_secrets,
+            past_epoch_message_secrets,
         )?;
 
         Ok(Some(Self {
@@ -589,7 +688,8 @@ impl MlsGroup {
             group_epoch_secrets,
             own_leaf_index,
             message_secrets_store,
-            message_secrets_persistence_mode: MessageSecretsPersistenceMode::ExternalEpochPayloads,
+            message_secrets_persistence_mode:
+                MessageSecretsPersistenceMode::ExternalEpochMessageSecrets,
             resumption_psk_store,
             mls_group_config,
             own_leaf_nodes,
@@ -611,6 +711,7 @@ impl MlsGroup {
         storage.delete_own_leaf_index(self.group_id())?;
         storage.delete_group_epoch_secrets(self.group_id())?;
         storage.delete_message_secrets(self.group_id())?;
+        storage.delete_group_epoch_message_secrets(self.group_id())?;
         storage.delete_all_resumption_psk_secrets(self.group_id())?;
         storage.delete_group_config(self.group_id())?;
         storage.delete_own_leaf_nodes(self.group_id())?;
@@ -637,19 +738,21 @@ impl MlsGroup {
         self.public_group().export_ratchet_tree()
     }
 
-    /// Export the current epoch message secrets as an opaque payload.
-    pub fn export_current_epoch_payload(
+    /// Export the current epoch message secrets as an opaque message_secrets.
+    pub fn export_current_epoch_message_secrets(
         &self,
-    ) -> Result<OptimizeCurrentEpochPayload, ExportOptimizeError> {
-        self.message_secrets_store.export_current_epoch_payload()
+    ) -> Result<OptimizeCurrentEpochMessageSecrets, ExportOptimizeError> {
+        self.message_secrets_store
+            .export_current_epoch_message_secrets()
     }
 
-    /// Export a past epoch secret tree as an opaque payload.
-    pub fn export_past_epoch_payload(
+    /// Export a past epoch secret tree as an opaque message_secrets.
+    pub fn export_past_epoch_message_secrets(
         &self,
         epoch: GroupEpoch,
-    ) -> Result<Option<OptimizePastEpochPayload>, ExportOptimizeError> {
-        self.message_secrets_store.export_past_epoch_payload(epoch)
+    ) -> Result<Option<OptimizePastEpochMessageSecrets>, ExportOptimizeError> {
+        self.message_secrets_store
+            .export_past_epoch_message_secrets(epoch)
     }
 }
 
@@ -898,11 +1001,37 @@ impl MlsGroup {
         &self,
         storage: &Storage,
     ) -> Result<(), Storage::Error> {
+        if storage.supports_epoch_message_secrets() {
+            if let Ok(message_secrets) = self.export_epoch_message_secrets_snapshot() {
+                storage.replace_group_epoch_message_secrets(self.group_id(), message_secrets)?;
+                storage.delete_message_secrets(self.group_id())?;
+            }
+            return Ok(());
+        }
+
         if self.message_secrets_persistence_mode == MessageSecretsPersistenceMode::LegacyStorage {
             storage.write_message_secrets(self.group_id(), &self.message_secrets_store)?;
         }
 
         Ok(())
+    }
+
+    /// KCHAT: Export current and retained past MessageSecrets rows for storage providers.
+    fn export_epoch_message_secrets_snapshot(
+        &self,
+    ) -> Result<Vec<(u64, Vec<u8>)>, ExportOptimizeError> {
+        let current_epoch = self.epoch().as_u64();
+        let mut rows = Vec::with_capacity(current_epoch as usize + 1);
+        rows.push((
+            current_epoch,
+            self.export_current_epoch_message_secrets()?.message_secrets,
+        ));
+        for epoch in 0..current_epoch {
+            if let Some(message_secrets) = self.export_past_epoch_message_secrets(epoch.into())? {
+                rows.push((epoch, message_secrets.message_secrets));
+            }
+        }
+        Ok(rows)
     }
 
     /// Converts PublicMessage to MlsMessage. Depending on whether handshake
@@ -956,7 +1085,7 @@ impl MlsGroup {
         self.context()
     }
 
-    #[cfg(any(feature = "test-utils", test))]
+    /// Returns the tree hash from the current group context.
     pub fn tree_hash(&self) -> &[u8] {
         self.public_group().group_context().tree_hash()
     }
