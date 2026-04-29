@@ -2,7 +2,7 @@ use crate::{
     credentials::test_utils::new_credential,
     framing::MessageDecryptionError,
     group::{
-        LoadOptimizeError, OptimizeCurrentEpochPayload, OptimizePastEpochPayload,
+        LoadOptimizeError, OptimizeCurrentEpochMessageSecrets, OptimizePastEpochMessageSecrets,
         ProcessMessageError, ValidationError,
     },
     prelude::*,
@@ -13,27 +13,28 @@ use openmls_basic_credential::SignatureKeyPair;
 fn try_load_group_optimize(
     provider: &OpenMlsRustCrypto,
     group_id: &GroupId,
-    current_epoch_payload: OptimizeCurrentEpochPayload,
-    past_epoch_payloads: Vec<OptimizePastEpochPayload>,
+    current_epoch: GroupEpoch,
+    current_epoch_message_secrets: OptimizeCurrentEpochMessageSecrets,
+    past_epoch_message_secrets: Vec<OptimizePastEpochMessageSecrets>,
 ) -> Result<MlsGroup, LoadOptimizeError> {
     let storage = provider.storage();
-    let current_epoch = MlsGroup::load(storage, group_id)
-        .unwrap()
-        .expect("group should exist in storage")
-        .epoch()
-        .as_u64();
+    let current_epoch = current_epoch.as_u64();
     storage
-        .write_group_current_epoch(group_id, current_epoch)
+        .mark_group_epoch_message_secrets_migrated(group_id, true)
         .unwrap();
     storage
-        .write_group_epoch_payload(group_id, current_epoch, &current_epoch_payload.payload)
+        .write_group_epoch_message_secrets(
+            group_id,
+            current_epoch,
+            &current_epoch_message_secrets.message_secrets,
+        )
         .unwrap();
-    for past_epoch_payload in &past_epoch_payloads {
+    for past_epoch_message_secrets in &past_epoch_message_secrets {
         storage
-            .write_group_epoch_payload(
+            .write_group_epoch_message_secrets(
                 group_id,
-                past_epoch_payload.epoch.as_u64(),
-                &past_epoch_payload.payload,
+                past_epoch_message_secrets.epoch.as_u64(),
+                &past_epoch_message_secrets.message_secrets,
             )
             .unwrap();
     }
@@ -41,9 +42,9 @@ fn try_load_group_optimize(
     MlsGroup::load_optimize(
         storage,
         group_id,
-        past_epoch_payloads
+        past_epoch_message_secrets
             .iter()
-            .map(|past_epoch_payload| past_epoch_payload.epoch),
+            .map(|past_epoch_message_secrets| past_epoch_message_secrets.epoch),
     )
     .map(|group| group.expect("group should exist in storage"))
 }
@@ -140,10 +141,15 @@ fn test_load_optimize_roundtrip_current_epoch() {
         group_id,
     ) = setup_two_member_group(ciphersuite, 0);
 
-    let current_epoch_payload = bob_group.export_current_epoch_payload().unwrap();
-    let mut optimized_group =
-        try_load_group_optimize(&bob_provider, &group_id, current_epoch_payload, Vec::new())
-            .expect("load_optimize should succeed for current epoch only");
+    let current_epoch_message_secrets = bob_group.export_current_epoch_message_secrets().unwrap();
+    let mut optimized_group = try_load_group_optimize(
+        &bob_provider,
+        &group_id,
+        bob_group.epoch(),
+        current_epoch_message_secrets,
+        Vec::new(),
+    )
+    .expect("load_optimize should succeed for current epoch only");
 
     let plaintext = b"hello from current epoch";
     let ciphertext = alice_group
@@ -210,19 +216,20 @@ fn test_load_optimize_roundtrip_past_epoch() {
         .merge_staged_commit(&bob_provider, staged_commit)
         .unwrap();
 
-    let current_epoch_payload = bob_group.export_current_epoch_payload().unwrap();
-    let past_epoch_payload = bob_group
-        .export_past_epoch_payload(old_epoch)
+    let current_epoch_message_secrets = bob_group.export_current_epoch_message_secrets().unwrap();
+    let past_epoch_message_secrets = bob_group
+        .export_past_epoch_message_secrets(old_epoch)
         .unwrap()
-        .expect("past epoch payload should exist after commit");
+        .expect("past epoch message_secrets should exist after commit");
 
     let mut optimized_group = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        current_epoch_payload,
-        vec![past_epoch_payload.clone()],
+        bob_group.epoch(),
+        current_epoch_message_secrets,
+        vec![past_epoch_message_secrets.clone()],
     )
-    .expect("load_optimize should succeed with selected past epoch payload");
+    .expect("load_optimize should succeed with selected past epoch message_secrets");
 
     let processed = optimized_group
         .process_message(
@@ -235,7 +242,8 @@ fn test_load_optimize_roundtrip_past_epoch() {
     let err = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        bob_group.export_current_epoch_payload().unwrap(),
+        bob_group.epoch(),
+        bob_group.export_current_epoch_message_secrets().unwrap(),
         Vec::new(),
     )
     .unwrap()
@@ -243,7 +251,7 @@ fn test_load_optimize_roundtrip_past_epoch() {
         &bob_provider,
         old_ciphertext.clone().into_protocol_message().unwrap(),
     )
-    .expect_err("missing past payload should fail");
+    .expect_err("missing past message_secrets should fail");
     assert!(matches!(
         err,
         ProcessMessageError::ValidationError(ValidationError::NoPastEpochData)
@@ -255,19 +263,27 @@ fn test_load_optimize_roundtrip_past_epoch() {
     let duplicate_err = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        bob_group.export_current_epoch_payload().unwrap(),
-        vec![past_epoch_payload.clone(), past_epoch_payload.clone()],
+        bob_group.epoch(),
+        bob_group.export_current_epoch_message_secrets().unwrap(),
+        vec![
+            past_epoch_message_secrets.clone(),
+            past_epoch_message_secrets.clone(),
+        ],
     )
-    .expect_err("duplicate past payloads must fail");
-    assert_eq!(duplicate_err, LoadOptimizeError::DuplicatePastEpoch);
+    .expect_err("duplicate past message secrets must fail");
+    assert_eq!(
+        duplicate_err,
+        LoadOptimizeError::DuplicatePastEpochMessageSecrets
+    );
 
     try_load_group_optimize(
         &bob_provider,
         &group_id,
-        bob_group.export_current_epoch_payload().unwrap(),
-        vec![OptimizePastEpochPayload {
+        bob_group.epoch(),
+        bob_group.export_current_epoch_message_secrets().unwrap(),
+        vec![OptimizePastEpochMessageSecrets {
             epoch: (bob_group.epoch().as_u64() + 1).into(),
-            payload: past_epoch_payload.payload.clone(),
+            message_secrets: past_epoch_message_secrets.message_secrets.clone(),
         }],
     )
     .expect("future epoch requests should be ignored at load time");
@@ -275,26 +291,31 @@ fn test_load_optimize_roundtrip_past_epoch() {
     let invalid_current_err = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        OptimizeCurrentEpochPayload {
-            payload: vec![0xff],
+        bob_group.epoch(),
+        OptimizeCurrentEpochMessageSecrets {
+            message_secrets: vec![0xff],
         },
-        vec![past_epoch_payload.clone()],
+        vec![past_epoch_message_secrets.clone()],
     )
-    .expect_err("corrupt current payload must fail");
+    .expect_err("corrupt current message_secrets must fail");
     assert_eq!(
         invalid_current_err,
-        LoadOptimizeError::InvalidCurrentPayload
+        LoadOptimizeError::InvalidCurrentMessageSecrets
     );
 
     let invalid_past_err = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        bob_group.export_current_epoch_payload().unwrap(),
-        vec![OptimizePastEpochPayload {
-            epoch: past_epoch_payload.epoch,
-            payload: vec![0xff],
+        bob_group.epoch(),
+        bob_group.export_current_epoch_message_secrets().unwrap(),
+        vec![OptimizePastEpochMessageSecrets {
+            epoch: past_epoch_message_secrets.epoch,
+            message_secrets: vec![0xff],
         }],
     )
-    .expect_err("corrupt past payload must fail");
-    assert_eq!(invalid_past_err, LoadOptimizeError::InvalidPastPayload);
+    .expect_err("corrupt past message_secrets must fail");
+    assert_eq!(
+        invalid_past_err,
+        LoadOptimizeError::InvalidPastMessageSecrets
+    );
 }

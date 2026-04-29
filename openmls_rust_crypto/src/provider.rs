@@ -35,9 +35,7 @@ pub struct RustCrypto {
     rng: RwLock<rand_chacha::ChaCha20Rng>,
 }
 
-// For testing we want to clone.
-// But really we just create a new Rng.
-#[cfg(feature = "test-utils")]
+// Cloning a provider creates a fresh RNG-backed crypto provider.
 impl Clone for RustCrypto {
     fn clone(&self) -> Self {
         Self::default()
