@@ -937,6 +937,47 @@ impl MlsGroup {
         }
     }
 
+    /// KCHAT: Ensure one past epoch MessageSecrets row is available before processing a message.
+    pub fn ensure_epoch_message_secrets<Storage: crate::storage::StorageProvider>(
+        &mut self,
+        storage: &Storage,
+        epoch: GroupEpoch,
+    ) -> Result<(), LoadOptimizeError> {
+        let current_epoch = self.context().epoch();
+        if epoch >= current_epoch || self.message_secrets_for_epoch(epoch).is_ok() {
+            return Ok(());
+        }
+
+        if !storage.supports_epoch_message_secrets()
+            || !storage
+                .is_group_epoch_message_secrets_migrated(self.group_id())
+                .map_err(LoadOptimizeError::storage)?
+        {
+            return Ok(());
+        }
+
+        let epoch_u64 = epoch.as_u64();
+        let keep_from = current_epoch
+            .as_u64()
+            .saturating_sub(self.message_secrets_store.max_epochs as u64);
+        if epoch_u64 < keep_from {
+            return Err(LoadOptimizeError::MissingPastEpochMessageSecrets { epoch: epoch_u64 });
+        }
+
+        let message_secrets = storage
+            .group_epoch_message_secrets(self.group_id(), epoch_u64)
+            .map_err(LoadOptimizeError::storage)?
+            .ok_or(LoadOptimizeError::MissingPastEpochMessageSecrets { epoch: epoch_u64 })?;
+        self.message_secrets_store
+            .insert_past_epoch_message_secrets(
+                current_epoch,
+                OptimizePastEpochMessageSecrets {
+                    epoch,
+                    message_secrets,
+                },
+            )
+    }
+
     /// Get the message secrets and leaves for the given epoch. Either from the
     /// secrets store or from the group.
     ///
@@ -1317,9 +1358,33 @@ impl MlsGroup {
         storage: &Storage,
     ) -> Result<(), Storage::Error> {
         if storage.supports_epoch_message_secrets() {
-            if let Ok(message_secrets) = self.export_epoch_message_secrets_snapshot() {
-                storage.replace_group_epoch_message_secrets(self.group_id(), message_secrets)?;
-                storage.delete_message_secrets(self.group_id())?;
+            match self.export_epoch_message_secrets_snapshot() {
+                Ok(message_secrets) => {
+                    for (epoch, message_secrets) in message_secrets {
+                        storage.write_group_epoch_message_secrets(
+                            self.group_id(),
+                            epoch,
+                            &message_secrets,
+                        )?;
+                    }
+                    let current_epoch = self.epoch().as_u64();
+                    let keep_from =
+                        current_epoch.saturating_sub(self.message_secrets_store.max_epochs as u64);
+                    storage.prune_group_epoch_message_secrets(
+                        self.group_id(),
+                        keep_from,
+                        current_epoch,
+                    )?;
+                    storage.mark_group_epoch_message_secrets_migrated(self.group_id(), true)?;
+                    storage.delete_message_secrets(self.group_id())?;
+                }
+                Err(_)
+                    if self.message_secrets_persistence_mode
+                        == MessageSecretsPersistenceMode::LegacyStorage =>
+                {
+                    storage.write_message_secrets(self.group_id(), &self.message_secrets_store)?;
+                }
+                Err(_) => {}
             }
             return Ok(());
         }

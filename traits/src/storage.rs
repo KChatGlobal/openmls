@@ -488,6 +488,16 @@ pub trait StorageProvider<const VERSION: u16> {
         Ok(())
     }
 
+    /// KCHAT: Prunes epoch-based MessageSecrets rows outside the retained epoch window.
+    fn prune_group_epoch_message_secrets<GroupId: traits::GroupId<VERSION>>(
+        &self,
+        _group_id: &GroupId,
+        _keep_from_epoch: u64,
+        _current_epoch: u64,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     /// Returns the ResumptionPskStore for the group with the given id.
     ///
     /// Returning `None` here is considered an error because the store is needed
