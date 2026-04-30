@@ -223,6 +223,31 @@ impl MessageSecretsStore {
         })
     }
 
+    /// KCHAT: Insert or update one past epoch MessageSecrets row loaded on demand.
+    pub(crate) fn insert_past_epoch_message_secrets(
+        &mut self,
+        current_group_epoch: GroupEpoch,
+        message_secrets: OptimizePastEpochMessageSecrets,
+    ) -> Result<(), LoadOptimizeError> {
+        if message_secrets.epoch >= current_group_epoch {
+            return Err(LoadOptimizeError::PastEpochMessageSecretsIsCurrentOrFuture);
+        }
+
+        let epoch_tree = deserialize_past_epoch_message_secrets(message_secrets)
+            .map_err(|_| LoadOptimizeError::InvalidPastMessageSecrets)?;
+        if let Some(existing) = self
+            .past_epoch_trees
+            .iter_mut()
+            .find(|existing| existing.epoch == epoch_tree.epoch)
+        {
+            *existing = epoch_tree;
+            return Ok(());
+        }
+
+        self.past_epoch_trees.push_back(epoch_tree);
+        Ok(())
+    }
+
     /// KCHAT: Export the current epoch MessageSecrets row for external storage.
     pub(crate) fn export_current_epoch_message_secrets(
         &self,

@@ -710,7 +710,7 @@ impl StorageProvider<CURRENT_VERSION> for MemoryStorage {
     }
 
     fn supports_epoch_message_secrets(&self) -> bool {
-        true
+        false
     }
 
     fn is_group_epoch_message_secrets_migrated<GroupId: traits::GroupId<CURRENT_VERSION>>(
@@ -736,6 +736,15 @@ impl StorageProvider<CURRENT_VERSION> for MemoryStorage {
         )
     }
 
+    fn write_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+        message_secrets: &[u8],
+    ) -> Result<(), Self::Error> {
+        MemoryStorage::write_group_epoch_message_secrets(self, group_id, epoch, message_secrets)
+    }
+
     fn replace_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
         &self,
         group_id: &GroupId,
@@ -752,6 +761,15 @@ impl StorageProvider<CURRENT_VERSION> for MemoryStorage {
         group_id: &GroupId,
     ) -> Result<(), Self::Error> {
         self.mark_group_epoch_message_secrets_migrated(group_id, false)
+    }
+
+    fn prune_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
+        &self,
+        _group_id: &GroupId,
+        _keep_from_epoch: u64,
+        _current_epoch: u64,
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 
     fn write_message_secrets<
