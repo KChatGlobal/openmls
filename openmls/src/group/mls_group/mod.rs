@@ -641,7 +641,7 @@ impl MlsGroup {
         };
 
         let current_epoch = public_group.group_context().epoch().as_u64();
-        let mut rows = Vec::with_capacity(current_epoch as usize + 1);
+        let mut rows = Vec::with_capacity(message_secrets_store.max_epochs + 1);
         rows.push((
             current_epoch,
             message_secrets_store
@@ -649,7 +649,10 @@ impl MlsGroup {
                 .map_err(|_| LibraryError::custom("Failed to export epoch MessageSecrets"))?
                 .message_secrets,
         ));
-        for epoch in 0..current_epoch {
+
+        let max_past_epochs = message_secrets_store.max_epochs as u64;
+        let keep_from_epoch = current_epoch.saturating_sub(max_past_epochs);
+        for epoch in keep_from_epoch..current_epoch {
             if let Some(message_secrets) = message_secrets_store
                 .export_past_epoch_message_secrets(epoch.into())
                 .map_err(|_| LibraryError::custom("Failed to export epoch MessageSecrets"))?
@@ -937,47 +940,6 @@ impl MlsGroup {
         }
     }
 
-    /// KCHAT: Ensure one past epoch MessageSecrets row is available before processing a message.
-    pub fn ensure_epoch_message_secrets<Storage: crate::storage::StorageProvider>(
-        &mut self,
-        storage: &Storage,
-        epoch: GroupEpoch,
-    ) -> Result<(), LoadOptimizeError> {
-        let current_epoch = self.context().epoch();
-        if epoch >= current_epoch || self.message_secrets_for_epoch(epoch).is_ok() {
-            return Ok(());
-        }
-
-        if !storage.supports_epoch_message_secrets()
-            || !storage
-                .is_group_epoch_message_secrets_migrated(self.group_id())
-                .map_err(LoadOptimizeError::storage)?
-        {
-            return Ok(());
-        }
-
-        let epoch_u64 = epoch.as_u64();
-        let keep_from = current_epoch
-            .as_u64()
-            .saturating_sub(self.message_secrets_store.max_epochs as u64);
-        if epoch_u64 < keep_from {
-            return Err(LoadOptimizeError::MissingPastEpochMessageSecrets { epoch: epoch_u64 });
-        }
-
-        let message_secrets = storage
-            .group_epoch_message_secrets(self.group_id(), epoch_u64)
-            .map_err(LoadOptimizeError::storage)?
-            .ok_or(LoadOptimizeError::MissingPastEpochMessageSecrets { epoch: epoch_u64 })?;
-        self.message_secrets_store
-            .insert_past_epoch_message_secrets(
-                current_epoch,
-                OptimizePastEpochMessageSecrets {
-                    epoch,
-                    message_secrets,
-                },
-            )
-    }
-
     /// Get the message secrets and leaves for the given epoch. Either from the
     /// secrets store or from the group.
     ///
@@ -1132,7 +1094,7 @@ impl MlsGroup {
             msg
         };
 
-        self.persist_message_secrets_if_legacy(provider.storage())
+        self.persist_message_secrets(provider.storage())
             .map_err(MessageEncryptionError::StorageError)?;
 
         Ok(msg)
@@ -1341,7 +1303,7 @@ impl MlsGroup {
         self.public_group.store(storage)?;
         storage.write_group_epoch_secrets(self.group_id(), &self.group_epoch_secrets)?;
         storage.write_own_leaf_index(self.group_id(), &self.own_leaf_index)?;
-        self.persist_message_secrets_if_legacy(storage)?;
+        self.persist_message_secrets(storage)?;
         storage.write_resumption_psk_store(self.group_id(), &self.resumption_psk_store)?;
         storage.write_mls_join_config(self.group_id(), &self.mls_group_config)?;
         storage.write_group_state(self.group_id(), &self.group_state)?;
@@ -1353,7 +1315,10 @@ impl MlsGroup {
         Ok(())
     }
 
-    pub(crate) fn persist_message_secrets_if_legacy<Storage: crate::storage::StorageProvider>(
+    // KCHAT: Persist message secrets.
+    // Depending on the capabilities of the storage provider,
+    // this either writes the message secrets to the legacy group-level storage or to the new epoch-based storage.
+    pub(crate) fn persist_message_secrets<Storage: crate::storage::StorageProvider>(
         &self,
         storage: &Storage,
     ) -> Result<(), Storage::Error> {
@@ -1401,12 +1366,15 @@ impl MlsGroup {
         &self,
     ) -> Result<Vec<(u64, Vec<u8>)>, ExportOptimizeError> {
         let current_epoch = self.epoch().as_u64();
-        let mut rows = Vec::with_capacity(current_epoch as usize + 1);
+        let mut rows = Vec::with_capacity(self.message_secrets_store.max_epochs + 1);
         rows.push((
             current_epoch,
             self.export_current_epoch_message_secrets()?.message_secrets,
         ));
-        for epoch in 0..current_epoch {
+
+        let max_past_epochs = self.message_secrets_store.max_epochs as u64;
+        let keep_from_epoch = current_epoch.saturating_sub(max_past_epochs);
+        for epoch in keep_from_epoch..current_epoch {
             if let Some(message_secrets) = self.export_past_epoch_message_secrets(epoch.into())? {
                 rows.push((epoch, message_secrets.message_secrets));
             }
