@@ -1,5 +1,4 @@
 use openmls_traits::storage::*;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::{collections::HashMap, sync::RwLock};
 
@@ -186,26 +185,6 @@ impl MemoryStorage {
         }
     }
 
-    /// Internal helper to read storage values that are not OpenMLS `Entity`
-    /// types but still use the same memory storage key layout.
-    #[inline(always)]
-    fn read_serialized<const VERSION: u16, V: DeserializeOwned>(
-        &self,
-        label: &[u8],
-        key: &[u8],
-    ) -> Result<Option<V>, <Self as StorageProvider<CURRENT_VERSION>>::Error> {
-        let values = self.values.read().unwrap();
-        let storage_key = build_key_from_vec::<VERSION>(label, key.to_vec());
-
-        if let Some(value) = values.get(&storage_key) {
-            serde_json::from_slice(value)
-                .map_err(|_| MemoryStorageError::SerializationError)
-                .map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Internal helper to abstract read operations.
     #[inline(always)]
     fn read_list<const VERSION: u16, V: Entity<VERSION>>(
@@ -256,33 +235,6 @@ impl MemoryStorage {
 
         Ok(())
     }
-
-    /// KCHAT: Test/helper writer for epoch-based group metadata.
-    pub fn mark_group_epoch_message_secrets_migrated<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-        done: bool,
-    ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
-        self.write::<CURRENT_VERSION>(
-            GROUP_EPOCH_MESSAGE_SECRETS_META_LABEL,
-            &serde_json::to_vec(group_id)?,
-            serde_json::to_vec(&done)?,
-        )
-    }
-
-    /// KCHAT: Test/helper writer for opaque epoch-based MessageSecrets rows.
-    pub fn write_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-        epoch: u64,
-        message_secrets: &[u8],
-    ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
-        self.write::<CURRENT_VERSION>(
-            GROUP_EPOCH_MESSAGE_SECRETS_LABEL,
-            &serde_json::to_vec(&(group_id, epoch))?,
-            serde_json::to_vec(message_secrets)?,
-        )
-    }
 }
 
 /// Errors thrown by the key store.
@@ -320,8 +272,6 @@ const OWN_LEAF_NODE_INDEX_LABEL: &[u8] = b"OwnLeafNodeIndex";
 const EPOCH_SECRETS_LABEL: &[u8] = b"EpochSecrets";
 const RESUMPTION_PSK_STORE_LABEL: &[u8] = b"ResumptionPsk";
 const MESSAGE_SECRETS_LABEL: &[u8] = b"MessageSecrets";
-const GROUP_EPOCH_MESSAGE_SECRETS_META_LABEL: &[u8] = b"GroupEpochMessageSecretsMeta";
-const GROUP_EPOCH_MESSAGE_SECRETS_LABEL: &[u8] = b"GroupEpochMessageSecrets";
 
 impl StorageProvider<CURRENT_VERSION> for MemoryStorage {
     type Error = MemoryStorageError;
@@ -707,69 +657,6 @@ impl StorageProvider<CURRENT_VERSION> for MemoryStorage {
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error> {
         self.read(MESSAGE_SECRETS_LABEL, &serde_json::to_vec(group_id)?)
-    }
-
-    fn supports_epoch_message_secrets(&self) -> bool {
-        false
-    }
-
-    fn is_group_epoch_message_secrets_migrated<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<bool, Self::Error> {
-        Ok(self
-            .read_serialized::<CURRENT_VERSION, bool>(
-                GROUP_EPOCH_MESSAGE_SECRETS_META_LABEL,
-                &serde_json::to_vec(group_id)?,
-            )?
-            .unwrap_or(false))
-    }
-
-    fn group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-        epoch: u64,
-    ) -> Result<Option<Vec<u8>>, Self::Error> {
-        self.read_serialized::<CURRENT_VERSION, Vec<u8>>(
-            GROUP_EPOCH_MESSAGE_SECRETS_LABEL,
-            &serde_json::to_vec(&(group_id, epoch))?,
-        )
-    }
-
-    fn write_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-        epoch: u64,
-        message_secrets: &[u8],
-    ) -> Result<(), Self::Error> {
-        MemoryStorage::write_group_epoch_message_secrets(self, group_id, epoch, message_secrets)
-    }
-
-    fn replace_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-        message_secrets: Vec<(u64, Vec<u8>)>,
-    ) -> Result<(), Self::Error> {
-        for (epoch, bytes) in message_secrets {
-            self.write_group_epoch_message_secrets(group_id, epoch, &bytes)?;
-        }
-        self.mark_group_epoch_message_secrets_migrated(group_id, true)
-    }
-
-    fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<(), Self::Error> {
-        self.mark_group_epoch_message_secrets_migrated(group_id, false)
-    }
-
-    fn prune_group_epoch_message_secrets<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        _group_id: &GroupId,
-        _keep_from_epoch: u64,
-        _current_epoch: u64,
-    ) -> Result<(), Self::Error> {
-        Ok(())
     }
 
     fn write_message_secrets<

@@ -1,52 +1,75 @@
+#![cfg(all(feature = "sqlite-provider", not(target_arch = "wasm32")))]
+
 use crate::{
     credentials::test_utils::new_credential,
     framing::MessageDecryptionError,
-    group::{
-        LoadOptimizeError, OptimizeCurrentEpochMessageSecrets, OptimizePastEpochMessageSecrets,
-        ProcessMessageError, ValidationError,
-    },
+    group::{LoadOptimizeError, ProcessMessageError, ValidationError},
     prelude::*,
-    test_utils::OpenMlsRustCrypto,
 };
 use openmls_basic_credential::SignatureKeyPair;
+use openmls_rust_crypto::RustCrypto;
+use openmls_sqlite_storage::{Codec, Connection, SqliteStorageProvider};
+use openmls_traits::storage::StorageProvider as _;
+use serde::Serialize;
 
-fn try_load_group_optimize(
-    provider: &OpenMlsRustCrypto,
-    group_id: &GroupId,
-    current_epoch: GroupEpoch,
-    current_epoch_message_secrets: OptimizeCurrentEpochMessageSecrets,
-    past_epoch_message_secrets: Vec<OptimizePastEpochMessageSecrets>,
-) -> Result<MlsGroup, LoadOptimizeError> {
-    let storage = provider.storage();
-    let current_epoch = current_epoch.as_u64();
-    storage
-        .mark_group_epoch_message_secrets_migrated(group_id, true)
-        .unwrap();
-    storage
-        .write_group_epoch_message_secrets(
-            group_id,
-            current_epoch,
-            &current_epoch_message_secrets.message_secrets,
-        )
-        .unwrap();
-    for past_epoch_message_secrets in &past_epoch_message_secrets {
-        storage
-            .write_group_epoch_message_secrets(
-                group_id,
-                past_epoch_message_secrets.epoch.as_u64(),
-                &past_epoch_message_secrets.message_secrets,
-            )
-            .unwrap();
+#[derive(Default)]
+struct JsonCodec;
+
+impl Codec for JsonCodec {
+    type Error = serde_json::Error;
+
+    fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>, Self::Error> {
+        serde_json::to_vec(value)
     }
 
-    MlsGroup::load_optimize(
-        storage,
-        group_id,
-        past_epoch_message_secrets
-            .iter()
-            .map(|past_epoch_message_secrets| past_epoch_message_secrets.epoch),
-    )
-    .map(|group| group.expect("group should exist in storage"))
+    fn from_slice<T: serde::de::DeserializeOwned>(slice: &[u8]) -> Result<T, Self::Error> {
+        serde_json::from_slice(slice)
+    }
+}
+
+struct SqliteTestProvider {
+    crypto: RustCrypto,
+    storage: SqliteStorageProvider<JsonCodec, Connection>,
+}
+
+impl Default for SqliteTestProvider {
+    fn default() -> Self {
+        let connection = Connection::open_in_memory().unwrap();
+        let mut storage = SqliteStorageProvider::new(connection);
+        storage.run_migrations().unwrap();
+        Self {
+            crypto: RustCrypto::default(),
+            storage,
+        }
+    }
+}
+
+impl OpenMlsProvider for SqliteTestProvider {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = RustCrypto;
+    type StorageProvider = SqliteStorageProvider<JsonCodec, Connection>;
+
+    fn storage(&self) -> &Self::StorageProvider {
+        &self.storage
+    }
+
+    fn crypto(&self) -> &Self::CryptoProvider {
+        &self.crypto
+    }
+
+    fn rand(&self) -> &Self::RandProvider {
+        &self.crypto
+    }
+}
+
+fn try_load_group_optimize(
+    provider: &SqliteTestProvider,
+    group_id: &GroupId,
+    past_epochs: impl IntoIterator<Item = GroupEpoch>,
+) -> Result<MlsGroup, LoadOptimizeError> {
+    let storage = provider.storage();
+    MlsGroup::load_optimize(storage, group_id, past_epochs)
+        .map(|group| group.expect("group should exist in storage"))
 }
 
 fn extract_application_message(processed_message: ProcessedMessage) -> Vec<u8> {
@@ -60,16 +83,16 @@ fn setup_two_member_group(
     ciphersuite: Ciphersuite,
     max_past_epochs: usize,
 ) -> (
-    OpenMlsRustCrypto,
+    SqliteTestProvider,
     SignatureKeyPair,
     MlsGroup,
-    OpenMlsRustCrypto,
+    SqliteTestProvider,
     SignatureKeyPair,
     MlsGroup,
     GroupId,
 ) {
-    let alice_provider = OpenMlsRustCrypto::default();
-    let bob_provider = OpenMlsRustCrypto::default();
+    let alice_provider = SqliteTestProvider::default();
+    let bob_provider = SqliteTestProvider::default();
     let group_id = GroupId::from_slice(b"load_optimize_group");
 
     let (alice_credential, alice_signer) =
@@ -137,19 +160,12 @@ fn test_load_optimize_roundtrip_current_epoch() {
         mut alice_group,
         bob_provider,
         _bob_signer,
-        bob_group,
+        _bob_group,
         group_id,
     ) = setup_two_member_group(ciphersuite, 0);
 
-    let current_epoch_message_secrets = bob_group.export_current_epoch_message_secrets().unwrap();
-    let mut optimized_group = try_load_group_optimize(
-        &bob_provider,
-        &group_id,
-        bob_group.epoch(),
-        current_epoch_message_secrets,
-        Vec::new(),
-    )
-    .expect("load_optimize should succeed for current epoch only");
+    let mut optimized_group = try_load_group_optimize(&bob_provider, &group_id, std::iter::empty())
+        .expect("load_optimize should succeed for current epoch only");
 
     let plaintext = b"hello from current epoch";
     let ciphertext = alice_group
@@ -216,20 +232,13 @@ fn test_load_optimize_roundtrip_past_epoch() {
         .merge_staged_commit(&bob_provider, staged_commit)
         .unwrap();
 
-    let current_epoch_message_secrets = bob_group.export_current_epoch_message_secrets().unwrap();
     let past_epoch_message_secrets = bob_group
         .export_past_epoch_message_secrets(old_epoch)
         .unwrap()
         .expect("past epoch message_secrets should exist after commit");
 
-    let mut optimized_group = try_load_group_optimize(
-        &bob_provider,
-        &group_id,
-        bob_group.epoch(),
-        current_epoch_message_secrets,
-        vec![past_epoch_message_secrets.clone()],
-    )
-    .expect("load_optimize should succeed with selected past epoch message_secrets");
+    let mut optimized_group = try_load_group_optimize(&bob_provider, &group_id, [old_epoch])
+        .expect("load_optimize should succeed with selected past epoch message_secrets");
 
     let processed = optimized_group
         .process_message(
@@ -239,19 +248,13 @@ fn test_load_optimize_roundtrip_past_epoch() {
         .unwrap();
     assert_eq!(extract_application_message(processed), old_plaintext);
 
-    let err = try_load_group_optimize(
-        &bob_provider,
-        &group_id,
-        bob_group.epoch(),
-        bob_group.export_current_epoch_message_secrets().unwrap(),
-        Vec::new(),
-    )
-    .unwrap()
-    .process_message(
-        &bob_provider,
-        old_ciphertext.clone().into_protocol_message().unwrap(),
-    )
-    .expect_err("missing past message_secrets should fail");
+    let err = try_load_group_optimize(&bob_provider, &group_id, std::iter::empty())
+        .unwrap()
+        .process_message(
+            &bob_provider,
+            old_ciphertext.clone().into_protocol_message().unwrap(),
+        )
+        .expect_err("missing past message_secrets should fail");
     assert!(matches!(
         err,
         ProcessMessageError::ValidationError(ValidationError::NoPastEpochData)
@@ -263,11 +266,9 @@ fn test_load_optimize_roundtrip_past_epoch() {
     let duplicate_err = try_load_group_optimize(
         &bob_provider,
         &group_id,
-        bob_group.epoch(),
-        bob_group.export_current_epoch_message_secrets().unwrap(),
-        vec![
-            past_epoch_message_secrets.clone(),
-            past_epoch_message_secrets.clone(),
+        [
+            past_epoch_message_secrets.epoch,
+            past_epoch_message_secrets.epoch,
         ],
     )
     .expect_err("duplicate past message secrets must fail");
@@ -279,41 +280,43 @@ fn test_load_optimize_roundtrip_past_epoch() {
     try_load_group_optimize(
         &bob_provider,
         &group_id,
-        bob_group.epoch(),
-        bob_group.export_current_epoch_message_secrets().unwrap(),
-        vec![OptimizePastEpochMessageSecrets {
-            epoch: (bob_group.epoch().as_u64() + 1).into(),
-            message_secrets: past_epoch_message_secrets.message_secrets.clone(),
-        }],
+        [(bob_group.epoch().as_u64() + 1).into()],
     )
     .expect("future epoch requests should be ignored at load time");
 
-    let invalid_current_err = try_load_group_optimize(
-        &bob_provider,
-        &group_id,
-        bob_group.epoch(),
-        OptimizeCurrentEpochMessageSecrets {
-            message_secrets: vec![0xff],
-        },
-        vec![past_epoch_message_secrets.clone()],
-    )
-    .expect_err("corrupt current message_secrets must fail");
+    bob_provider
+        .storage()
+        .write_group_epoch_message_secrets(&group_id, bob_group.epoch().as_u64(), &[0xff])
+        .unwrap();
+    let invalid_current_err = try_load_group_optimize(&bob_provider, &group_id, [old_epoch])
+        .expect_err("corrupt current message_secrets must fail");
     assert_eq!(
         invalid_current_err,
         LoadOptimizeError::InvalidCurrentMessageSecrets
     );
 
-    let invalid_past_err = try_load_group_optimize(
-        &bob_provider,
-        &group_id,
-        bob_group.epoch(),
-        bob_group.export_current_epoch_message_secrets().unwrap(),
-        vec![OptimizePastEpochMessageSecrets {
-            epoch: past_epoch_message_secrets.epoch,
-            message_secrets: vec![0xff],
-        }],
-    )
-    .expect_err("corrupt past message_secrets must fail");
+    bob_provider
+        .storage()
+        .write_group_epoch_message_secrets(
+            &group_id,
+            bob_group.epoch().as_u64(),
+            &bob_group
+                .export_current_epoch_message_secrets()
+                .unwrap()
+                .message_secrets,
+        )
+        .unwrap();
+    bob_provider
+        .storage()
+        .write_group_epoch_message_secrets(
+            &group_id,
+            past_epoch_message_secrets.epoch.as_u64(),
+            &[0xff],
+        )
+        .unwrap();
+    let invalid_past_err =
+        try_load_group_optimize(&bob_provider, &group_id, [past_epoch_message_secrets.epoch])
+            .expect_err("corrupt past message_secrets must fail");
     assert_eq!(
         invalid_past_err,
         LoadOptimizeError::InvalidPastMessageSecrets
