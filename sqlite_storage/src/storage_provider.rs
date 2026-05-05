@@ -4,7 +4,7 @@ use std::{
 };
 
 use openmls_traits::storage::{traits, Key, StorageProvider};
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     codec::Codec,
@@ -20,6 +20,7 @@ use crate::{
     signature_key_pairs::{
         StorableSignatureKeyPairs, StorableSignatureKeyPairsRef, StorableSignaturePublicKeyRef,
     },
+    wrappers::KeyRefWrapper,
     STORAGE_PROVIDER_VERSION,
 };
 
@@ -435,6 +436,155 @@ impl<C: Codec, ConnectionRef: Borrow<Connection>> StorageProvider<STORAGE_PROVID
             group_id,
             GroupDataType::MessageSecrets,
         )
+    }
+
+    fn supports_epoch_message_secrets(&self) -> bool {
+        true
+    }
+
+    fn is_group_epoch_message_secrets_migrated<
+        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<bool, Self::Error> {
+        self.connection
+            .borrow()
+            .query_row(
+                "SELECT migrated
+                FROM openmls_group_epoch_message_secrets_metadata
+                WHERE group_id = ?
+                    AND provider_version = ?",
+                params![
+                    KeyRefWrapper::<C, _>(group_id, PhantomData),
+                    STORAGE_PROVIDER_VERSION
+                ],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .map(|migrated| migrated.unwrap_or(false))
+    }
+
+    fn group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        self.connection
+            .borrow()
+            .query_row(
+                "SELECT message_secrets
+                FROM openmls_group_epoch_message_secrets
+                WHERE group_id = ?
+                    AND epoch = ?
+                    AND provider_version = ?",
+                params![
+                    KeyRefWrapper::<C, _>(group_id, PhantomData),
+                    epoch as i64,
+                    STORAGE_PROVIDER_VERSION
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    fn write_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+        message_secrets: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.connection.borrow().execute(
+            "INSERT OR REPLACE INTO openmls_group_epoch_message_secrets
+                (provider_version, group_id, epoch, message_secrets)
+            VALUES (?, ?, ?, ?)",
+            params![
+                STORAGE_PROVIDER_VERSION,
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                epoch as i64,
+                message_secrets
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn replace_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        message_secrets: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), Self::Error> {
+        self.connection.borrow().execute(
+            "DELETE FROM openmls_group_epoch_message_secrets
+            WHERE group_id = ?
+                AND provider_version = ?",
+            params![
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                STORAGE_PROVIDER_VERSION
+            ],
+        )?;
+
+        for (epoch, message_secrets) in message_secrets {
+            self.write_group_epoch_message_secrets(group_id, epoch, &message_secrets)?;
+        }
+
+        self.mark_group_epoch_message_secrets_migrated(group_id, true)
+    }
+
+    fn mark_group_epoch_message_secrets_migrated<
+        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+        done: bool,
+    ) -> Result<(), Self::Error> {
+        self.connection.borrow().execute(
+            "INSERT OR REPLACE INTO openmls_group_epoch_message_secrets_metadata
+                (provider_version, group_id, migrated)
+            VALUES (?, ?, ?)",
+            params![
+                STORAGE_PROVIDER_VERSION,
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                done
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        self.connection.borrow().execute(
+            "DELETE FROM openmls_group_epoch_message_secrets
+            WHERE group_id = ?
+                AND provider_version = ?",
+            params![
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                STORAGE_PROVIDER_VERSION
+            ],
+        )?;
+        self.mark_group_epoch_message_secrets_migrated(group_id, false)
+    }
+
+    fn prune_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        keep_from_epoch: u64,
+        current_epoch: u64,
+    ) -> Result<(), Self::Error> {
+        self.connection.borrow().execute(
+            "DELETE FROM openmls_group_epoch_message_secrets
+            WHERE group_id = ?
+                AND provider_version = ?
+                AND (epoch < ? OR epoch > ?)",
+            params![
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                STORAGE_PROVIDER_VERSION,
+                keep_from_epoch as i64,
+                current_epoch as i64
+            ],
+        )?;
+        Ok(())
     }
 
     fn resumption_psk_store<
