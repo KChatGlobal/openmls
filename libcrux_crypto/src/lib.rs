@@ -1,6 +1,8 @@
 use openmls_traits::{types::CryptoError, OpenMlsProvider};
 
 mod crypto;
+mod mldsa;
+mod mlkem1024_hpke;
 mod rand;
 
 pub use crypto::CryptoProvider;

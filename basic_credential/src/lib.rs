@@ -18,6 +18,8 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tls_codec::{TlsDeserialize, TlsDeserializeBytes, TlsSerialize, TlsSize};
 
+mod mldsa;
+
 /// A signature key pair for the basic credential.
 ///
 /// This can be used as keys to implement the MLS basic credential. It is a simple
@@ -57,6 +59,7 @@ impl Signer for SignatureKeyPair {
                 let signature = k.sign(payload);
                 Ok(signature.to_bytes().into())
             }
+            SignatureScheme::MLDSA87 => mldsa::sign_detached(&self.private, payload),
             _ => Err(SignerError::SigningError),
         }
     }
@@ -91,6 +94,7 @@ impl SignatureKeyPair {
                 let pk = sk.verifying_key().to_bytes().into();
                 (sk.to_bytes().into(), pk)
             }
+            SignatureScheme::MLDSA87 => mldsa::key_gen()?,
             _ => return Err(CryptoError::UnsupportedSignatureScheme),
         };
 

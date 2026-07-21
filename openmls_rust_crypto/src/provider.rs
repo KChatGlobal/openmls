@@ -59,6 +59,9 @@ fn kem_mode(kem: HpkeKemType) -> hpke_types::KemAlgorithm {
         HpkeKemType::XWingKemDraft6 => {
             unimplemented!("XWingKemDraft6 is not supported by the RustCrypto provider.")
         }
+        HpkeKemType::MlKem1024 => {
+            unimplemented!("MlKem1024 is not supported by the RustCrypto provider.")
+        }
     }
 }
 
@@ -68,6 +71,9 @@ fn kdf_mode(kdf: HpkeKdfType) -> hpke_types::KdfAlgorithm {
         HpkeKdfType::HkdfSha256 => hpke_types::KdfAlgorithm::HkdfSha256,
         HpkeKdfType::HkdfSha384 => hpke_types::KdfAlgorithm::HkdfSha384,
         HpkeKdfType::HkdfSha512 => hpke_types::KdfAlgorithm::HkdfSha512,
+        HpkeKdfType::Shake256 => {
+            unimplemented!("Shake256 is not supported by the RustCrypto provider.")
+        }
     }
 }
 

@@ -13,6 +13,8 @@ use rand_chacha::ChaCha20Core;
 
 use tls_codec::SecretVLBytes;
 
+use crate::{mldsa, mlkem1024_hpke};
+
 /// The libcrux-backed cryptography provider for OpenMLS
 pub struct CryptoProvider {
     pub(super) rng: Mutex<ReseedingRng<ChaCha20Core, OsRng>>,
@@ -37,7 +39,7 @@ impl OpenMlsCrypto for CryptoProvider {
         }?;
 
         match ciphersuite.signature_algorithm() {
-            SignatureScheme::ED25519 => Ok(()),
+            SignatureScheme::ED25519 | SignatureScheme::MLDSA87 => Ok(()),
             _ => Err(CryptoError::UnsupportedCiphersuite),
         }?;
 
@@ -47,6 +49,11 @@ impl OpenMlsCrypto for CryptoProvider {
 
         match ciphersuite.hpke_aead_algorithm() {
             HpkeAeadType::ChaCha20Poly1305 => Ok(()),
+            HpkeAeadType::AesGcm256
+                if mlkem1024_hpke::is_supported_config(&ciphersuite.hpke_config()) =>
+            {
+                Ok(())
+            }
             _ => Err(CryptoError::UnsupportedCiphersuite),
         }?;
 
@@ -58,6 +65,7 @@ impl OpenMlsCrypto for CryptoProvider {
             Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
             Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
             Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+            Ciphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87,
             // TODO: enable
             //Ciphersuite::MLS_128_DHKEMP256_AES128GCM_SHA256_P256,
         ]
@@ -204,6 +212,10 @@ impl OpenMlsCrypto for CryptoProvider {
     }
 
     fn signature_key_gen(&self, alg: SignatureScheme) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+        if matches!(alg, SignatureScheme::MLDSA87) {
+            return mldsa::key_gen();
+        }
+
         if !matches!(alg, SignatureScheme::ED25519) {
             return Err(CryptoError::UnsupportedSignatureScheme);
         }
@@ -231,6 +243,10 @@ impl OpenMlsCrypto for CryptoProvider {
         pk: &[u8],
         signature: &[u8],
     ) -> Result<(), CryptoError> {
+        if matches!(alg, SignatureScheme::MLDSA87) {
+            return mldsa::verify_detached(pk, data, signature);
+        }
+
         if !matches!(alg, SignatureScheme::ED25519) {
             return Err(CryptoError::UnsupportedSignatureScheme);
         }
@@ -245,6 +261,10 @@ impl OpenMlsCrypto for CryptoProvider {
     }
 
     fn sign(&self, alg: SignatureScheme, data: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        if matches!(alg, SignatureScheme::MLDSA87) {
+            return mldsa::sign_detached(key, data);
+        }
+
         if !matches!(alg, SignatureScheme::ED25519) {
             return Err(CryptoError::UnsupportedSignatureScheme);
         }
@@ -263,6 +283,10 @@ impl OpenMlsCrypto for CryptoProvider {
         aad: &[u8],
         ptxt: &[u8],
     ) -> Result<HpkeCiphertext, CryptoError> {
+        if mlkem1024_hpke::is_supported_config(&config) {
+            return mlkem1024_hpke::seal(pk_r, info, aad, ptxt);
+        }
+
         let mut config = hpke_config(config);
 
         let pk_r = hpke_rs::HpkePublicKey::new(pk_r.to_vec());
@@ -291,6 +315,10 @@ impl OpenMlsCrypto for CryptoProvider {
         info: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, CryptoError> {
+        if mlkem1024_hpke::is_supported_config(&config) {
+            return mlkem1024_hpke::open(input, sk_r, info, aad);
+        }
+
         let config = hpke_config(config);
 
         let sk_r = hpke_rs::HpkePrivateKey::new(sk_r.to_vec());
@@ -320,6 +348,15 @@ impl OpenMlsCrypto for CryptoProvider {
         exporter_context: &[u8],
         exporter_length: usize,
     ) -> Result<(KemOutput, ExporterSecret), CryptoError> {
+        if mlkem1024_hpke::is_supported_config(&config) {
+            return mlkem1024_hpke::setup_sender_and_export(
+                pk_r,
+                info,
+                exporter_context,
+                exporter_length,
+            );
+        }
+
         let mut config = hpke_config(config);
 
         let pk_r = hpke_rs::HpkePublicKey::new(pk_r.to_vec());
@@ -342,6 +379,16 @@ impl OpenMlsCrypto for CryptoProvider {
         exporter_context: &[u8],
         exporter_length: usize,
     ) -> Result<ExporterSecret, CryptoError> {
+        if mlkem1024_hpke::is_supported_config(&config) {
+            return mlkem1024_hpke::setup_receiver_and_export(
+                enc,
+                sk_r,
+                info,
+                exporter_context,
+                exporter_length,
+            );
+        }
+
         let config = hpke_config(config);
 
         let sk_r = hpke_rs::HpkePrivateKey::new(sk_r.to_vec());
@@ -360,6 +407,10 @@ impl OpenMlsCrypto for CryptoProvider {
         config: HpkeConfig,
         ikm: &[u8],
     ) -> Result<HpkeKeyPair, CryptoError> {
+        if mlkem1024_hpke::is_supported_config(&config) {
+            return mlkem1024_hpke::derive_keypair(ikm);
+        }
+
         let config = hpke_config(config);
 
         let key_pair: hpke_rs::HpkeKeyPair = config.derive_key_pair(ikm).map_err(|e| match e {
@@ -389,6 +440,7 @@ fn hpke_kdf(kdf: HpkeKdfType) -> hpke_rs_crypto::types::KdfAlgorithm {
         HpkeKdfType::HkdfSha256 => hpke_rs_crypto::types::KdfAlgorithm::HkdfSha256,
         HpkeKdfType::HkdfSha384 => hpke_rs_crypto::types::KdfAlgorithm::HkdfSha384,
         HpkeKdfType::HkdfSha512 => hpke_rs_crypto::types::KdfAlgorithm::HkdfSha512,
+        HpkeKdfType::Shake256 => panic!("SHAKE256 HPKE is handled by the ML-KEM-1024 adapter"),
     }
 }
 
@@ -400,6 +452,7 @@ fn hpke_kem(kem: HpkeKemType) -> hpke_rs_crypto::types::KemAlgorithm {
         HpkeKemType::DhKem25519 => hpke_rs_crypto::types::KemAlgorithm::DhKem25519,
         HpkeKemType::DhKem448 => hpke_rs_crypto::types::KemAlgorithm::DhKem448,
         HpkeKemType::XWingKemDraft6 => hpke_rs_crypto::types::KemAlgorithm::XWingDraft06,
+        HpkeKemType::MlKem1024 => panic!("ML-KEM-1024 HPKE is handled by the ML-KEM-1024 adapter"),
     }
 }
 
