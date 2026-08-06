@@ -54,7 +54,7 @@ mod exporting;
 mod updates;
 
 use config::*;
-use errors::{ExportOptimizeError, LoadOptimizeError};
+use errors::{ExportOptimizeError, LoadOptimizeError, MlsGroupLoadError};
 
 // Crate
 pub(crate) mod builder;
@@ -125,10 +125,11 @@ fn load_epoch_message_secrets_store<Storage: crate::storage::StorageProvider>(
     group_id: &GroupId,
     current_epoch: GroupEpoch,
     max_past_epochs: usize,
-) -> Result<Option<MessageSecretsStore>, Storage::Error> {
+) -> Result<Option<MessageSecretsStore>, MlsGroupLoadError<Storage::Error>> {
     let current_epoch_u64 = current_epoch.as_u64();
-    let Some(current_epoch_bytes) =
-        storage.group_epoch_message_secrets(group_id, current_epoch_u64)?
+    let Some(current_epoch_bytes) = storage
+        .group_epoch_message_secrets(group_id, current_epoch_u64)
+        .map_err(MlsGroupLoadError::StorageError)?
     else {
         return Ok(None);
     };
@@ -139,7 +140,10 @@ fn load_epoch_message_secrets_store<Storage: crate::storage::StorageProvider>(
     let keep_from = current_epoch_u64.saturating_sub(max_past_epochs as u64);
     let mut past_epoch_message_secrets = Vec::new();
     for epoch in keep_from..current_epoch_u64 {
-        if let Some(message_secrets) = storage.group_epoch_message_secrets(group_id, epoch)? {
+        if let Some(message_secrets) = storage
+            .group_epoch_message_secrets(group_id, epoch)
+            .map_err(MlsGroupLoadError::StorageError)?
+        {
             past_epoch_message_secrets.push(OptimizePastEpochMessageSecrets {
                 epoch: epoch.into(),
                 message_secrets,
@@ -147,13 +151,14 @@ fn load_epoch_message_secrets_store<Storage: crate::storage::StorageProvider>(
         }
     }
 
-    Ok(MessageSecretsStore::from_epoch_message_secrets(
+    MessageSecretsStore::from_epoch_message_secrets(
         max_past_epochs,
         current_epoch,
         current_epoch_message_secrets,
         past_epoch_message_secrets,
     )
-    .ok())
+    .map(Some)
+    .map_err(MlsGroupLoadError::EpochMessageSecrets)
 }
 
 impl Member {
@@ -490,18 +495,28 @@ impl MlsGroup {
     pub fn load<Storage: crate::storage::StorageProvider>(
         storage: &Storage,
         group_id: &GroupId,
-    ) -> Result<Option<MlsGroup>, Storage::Error> {
-        let public_group = PublicGroup::load(storage, group_id)?;
-        let group_epoch_secrets = storage.group_epoch_secrets(group_id)?;
-        let own_leaf_index = storage.own_leaf_index(group_id)?;
-        let resumption_psk_store = storage.resumption_psk_store(group_id)?;
-        let mls_group_config: Option<MlsGroupJoinConfig> =
-            storage.mls_group_join_config(group_id)?;
+    ) -> Result<Option<MlsGroup>, MlsGroupLoadError<Storage::Error>> {
+        let public_group =
+            PublicGroup::load(storage, group_id).map_err(MlsGroupLoadError::StorageError)?;
+        let group_epoch_secrets = storage
+            .group_epoch_secrets(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
+        let own_leaf_index = storage
+            .own_leaf_index(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
+        let resumption_psk_store = storage
+            .resumption_psk_store(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
+        let mls_group_config: Option<MlsGroupJoinConfig> = storage
+            .mls_group_join_config(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
         let message_secrets_store = if let (Some(public_group), Some(mls_group_config)) =
             (&public_group, &mls_group_config)
         {
             if storage.supports_epoch_message_secrets()
-                && storage.is_group_epoch_message_secrets_migrated(group_id)?
+                && storage
+                    .is_group_epoch_message_secrets_migrated(group_id)
+                    .map_err(MlsGroupLoadError::StorageError)?
             {
                 load_epoch_message_secrets_store(
                     storage,
@@ -510,15 +525,25 @@ impl MlsGroup {
                     mls_group_config.max_past_epochs,
                 )?
             } else {
-                storage.message_secrets(group_id)?
+                storage
+                    .message_secrets(group_id)
+                    .map_err(MlsGroupLoadError::StorageError)?
             }
         } else {
-            storage.message_secrets(group_id)?
+            storage
+                .message_secrets(group_id)
+                .map_err(MlsGroupLoadError::StorageError)?
         };
-        let own_leaf_nodes = storage.own_leaf_nodes(group_id)?;
-        let group_state = storage.group_state(group_id)?;
+        let own_leaf_nodes = storage
+            .own_leaf_nodes(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
+        let group_state = storage
+            .group_state(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
         #[cfg(feature = "extensions-draft-08")]
-        let application_export_tree = storage.application_export_tree(group_id)?;
+        let application_export_tree = storage
+            .application_export_tree(group_id)
+            .map_err(MlsGroupLoadError::StorageError)?;
 
         let build = || -> Option<Self> {
             Some(Self {
@@ -1000,8 +1025,8 @@ impl MlsGroup {
         Ok(())
     }
 
-    // KCHAT: Persist message secrets. 
-    // Depending on the capabilities of the storage provider, 
+    // KCHAT: Persist message secrets.
+    // Depending on the capabilities of the storage provider,
     // this either writes the message secrets to the legacy group-level storage or to the new epoch-based storage.
     pub(crate) fn persist_message_secrets<Storage: crate::storage::StorageProvider>(
         &self,

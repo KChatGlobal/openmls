@@ -98,6 +98,9 @@ pub enum WelcomeError<StorageError> {
     /// This error indicates that an error occurred while reading or writing from/to storage.
     #[error("An error occurred when querying storage")]
     StorageError(StorageError),
+    /// Error loading an existing group from storage.
+    #[error(transparent)]
+    LoadError(#[from] MlsGroupLoadError<StorageError>),
     /// A group with this [`GroupId`] already exists.
     #[error("A group with this [`GroupId`] already exists.")]
     GroupAlreadyExists,

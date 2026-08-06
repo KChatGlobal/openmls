@@ -280,7 +280,7 @@ impl ProcessedWelcome {
         // Check if we need to replace an old group
         if !replace_old_group
             && MlsGroup::load(provider.storage(), self.verifiable_group_info.group_id())
-                .map_err(WelcomeError::StorageError)?
+                .map_err(WelcomeError::LoadError)?
                 .is_some()
         {
             return Err(WelcomeError::GroupAlreadyExists);
