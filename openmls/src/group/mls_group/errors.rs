@@ -43,6 +43,9 @@ pub enum NewGroupError<StorageError> {
     /// Error accessing the storage.
     #[error("Error accessing the storage.")]
     StorageError(StorageError),
+    /// Error loading an existing group from storage.
+    #[error(transparent)]
+    LoadError(#[from] MlsGroupLoadError<StorageError>),
     /// Unsupported proposal type in required capabilities.
     #[error("Unsupported proposal type in required capabilities.")]
     UnsupportedProposalType,
@@ -78,6 +81,17 @@ pub enum SetPastEpochDeletionPolicyError<StorageError> {
     /// Error accessing the storage.
     #[error(transparent)]
     StorageError(#[from] StorageError),
+}
+
+/// Error loading an [`MlsGroup`](super::MlsGroup) from storage.
+#[derive(Error, Debug, PartialEq, Clone)]
+pub enum MlsGroupLoadError<StorageError> {
+    /// The storage provider returned an error.
+    #[error("Error accessing the storage.")]
+    StorageError(StorageError),
+    /// Epoch-based MessageSecrets data is missing or invalid.
+    #[error(transparent)]
+    EpochMessageSecrets(LoadOptimizeError),
 }
 
 /// EmptyInput error
