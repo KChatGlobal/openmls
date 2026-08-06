@@ -3,7 +3,7 @@
 use crate::{
     credentials::test_utils::new_credential,
     framing::MessageDecryptionError,
-    group::{LoadOptimizeError, ProcessMessageError, ValidationError},
+    group::{LoadOptimizeError, MlsGroupLoadError, ProcessMessageError, ValidationError},
     prelude::*,
 };
 use openmls_basic_credential::SignatureKeyPair;
@@ -294,6 +294,13 @@ fn test_load_optimize_roundtrip_past_epoch() {
         invalid_current_err,
         LoadOptimizeError::InvalidCurrentMessageSecrets
     );
+
+    assert!(matches!(
+        MlsGroup::load(bob_provider.storage(), &group_id),
+        Err(MlsGroupLoadError::EpochMessageSecrets(
+            LoadOptimizeError::InvalidCurrentMessageSecrets
+        ))
+    ));
 
     bob_provider
         .storage()
