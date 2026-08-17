@@ -8,14 +8,16 @@
 
 [![Docs][docs-release-badge]][docs-release-link]
 [![Book][book-release-badge]][book-release-link]
-![Rust Version][rustc-image]
+![Rust Version][rustc-image] [![KChat][kchat-image]][kchat-link]
 
 _OpenMLS_ is a Rust implementation of the Messaging Layer Security (MLS) protocol, as specified in [RFC 9420](https://datatracker.ietf.org/doc/html/rfc9420).
 
-<!-- The introduction of the book imports the lines up until here (line 13), excluding the headline and separately the lines below (starting from line 19, "Supported ciphersuite"). If the line numbers change here, please modify the imported lines in the book.-->
+<!-- The introduction of the book imports the lines up until here (line 13), excluding the headline and separately the lines below (starting from line 22, "Supported ciphersuite"). If the line numbers change here, please modify the imported lines in the book.-->
 
 It is a software library that can serve as a building block in applications that require end-to-end encryption of messages.
 It has a safe and easy-to-use interface that hides the complexity of the underlying cryptographic operations.
+
+> **KChat fork:** This fork powers [KChat](https://kchat.com). See [KChat Fork Notes](./KCHAT-FORK.md) for the fork policy and upstream base.
 
 ## Supported ciphersuites
 
@@ -82,7 +84,7 @@ For more details when working on OpenMLS itself please see the [Developer.md].
 
 ## Maintenance & Support
 
-OpenMLS is maintained and developed by [Phoenix R&D] and [CE Labs].
+OpenMLS is maintained and developed by [Phoenix R&D] and [CE Labs]. This KChat fork is maintained by [KChat].
 
 ## Acknowledgements
 
@@ -104,4 +106,7 @@ OpenMLS is maintained and developed by [Phoenix R&D] and [CE Labs].
 [Developer.md]: https://github.com/openmls/openmls/blob/main/Developer.md
 [Phoenix R&D]: https://phnx.im
 [CE Labs]: https://celabs.eu
+[kchat-image]: https://img.shields.io/badge/powered%20by-KChat-0E7C86?style=for-the-badge
+[kchat-link]: https://kchat.com
+[KChat]: https://kchat.com
 [Zulip]: https://zulip.com/

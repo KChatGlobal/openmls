@@ -9,4 +9,4 @@ This book provides guidance on using OpenMLS and its `MlsGroup` API to perform b
 
 <!-- Get the rest of the Readme -->
 
-{{#include ../../README.md:19:}}
+{{#include ../../README.md:22:}}
