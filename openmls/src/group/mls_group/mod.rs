@@ -799,6 +799,8 @@ impl MlsGroup {
             mls_group_config,
             own_leaf_nodes,
             aad: vec![],
+            #[cfg(feature = "extensions-draft")]
+            safe_aad: SafeAad::empty(),
             group_state,
             #[cfg(feature = "extensions-draft")]
             application_export_tree,
