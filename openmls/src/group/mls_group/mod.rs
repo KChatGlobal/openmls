@@ -593,7 +593,9 @@ impl MlsGroup {
                     storage,
                     group_id,
                     public_group.group_context().epoch(),
-                    mls_group_config.max_past_epochs,
+                    mls_group_config
+                        .max_past_epochs()
+                        .unwrap_or(isize::MAX as usize),
                 )?
             } else {
                 storage
@@ -756,7 +758,7 @@ impl MlsGroup {
         let group_state: Option<MlsGroupState> = storage
             .group_state(group_id)
             .map_err(LoadOptimizeError::storage)?;
-        #[cfg(feature = "extensions-draft-08")]
+        #[cfg(feature = "extensions-draft")]
         let application_export_tree = storage
             .application_export_tree(group_id)
             .map_err(LoadOptimizeError::storage)?;
@@ -778,7 +780,9 @@ impl MlsGroup {
         };
 
         let message_secrets_store = MessageSecretsStore::from_epoch_message_secrets(
-            mls_group_config.max_past_epochs,
+            mls_group_config
+                .max_past_epochs()
+                .unwrap_or(isize::MAX as usize),
             current_group_epoch,
             current_epoch_message_secrets,
             past_epoch_message_secrets,
@@ -796,7 +800,7 @@ impl MlsGroup {
             own_leaf_nodes,
             aad: vec![],
             group_state,
-            #[cfg(feature = "extensions-draft-08")]
+            #[cfg(feature = "extensions-draft")]
             application_export_tree,
         }))
     }
