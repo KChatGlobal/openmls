@@ -20,6 +20,8 @@ libcrux-traits = { version = "0.0.6" }
 openmls_traits = { workspace = true }
 openmls_memory_storage = { workspace = true }
 
+pqcrypto-mldsa = "0.1.2"
+pqcrypto-traits = "0.3.5"
 rand = "0.9"
 tls_codec.workspace = true
 rand_chacha = "0.9"
@@ -27,6 +29,7 @@ rand_chacha = "0.9"
 hpke-rs = { version = "0.6.1", features = ["hazmat", "serialization"] }
 hpke-rs-crypto = { version = "0.6.1" }
 hpke-rs-libcrux = { version = "0.6.1" }
+hpke_pq = { package = "hpke", version = "0.14.0", default-features = false, features = ["alloc", "getrandom", "aes", "mlkem", "shake"] }
 
 [features]
 extensions-draft-08 = [
